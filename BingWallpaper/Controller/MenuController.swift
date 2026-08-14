@@ -20,7 +20,6 @@ class MenuController: NSObject {
     private static let TEXT_VIEW_TAG = 7
     private static let UPDATE_STATUS_TAG = 8
     private static let REFRESH_IMAGES_TAG = 9
-    private static let PIN_WALLPAPER_TAG = 10
     private static let FAVORITES_TAG = 11
     private lazy var settingsWc = SettingsWc.instance()
     
@@ -77,11 +76,6 @@ class MenuController: NSObject {
         refreshItem.target = self
         refreshItem.tag = MenuController.REFRESH_IMAGES_TAG
         menu.addItem(refreshItem)
-
-        let pinItem = NSMenuItem(title: "Pin Current Wallpaper", action: #selector(togglePinnedWallpaper(_:)), keyEquivalent: "")
-        pinItem.target = self
-        pinItem.tag = MenuController.PIN_WALLPAPER_TAG
-        menu.addItem(pinItem)
 
         let favoritesItem = NSMenuItem(title: "Favorites", action: nil, keyEquivalent: "")
         favoritesItem.tag = MenuController.FAVORITES_TAG
@@ -147,17 +141,7 @@ class MenuController: NSObject {
         updateImageSelectorView(newSelectedDescriptorIndex: selectedDescriptorIndex)
     }
     
-    @MainActor
-    @objc func imageInfoAction(_ sender: NSButton) {
-        guard let descriptor = descriptors[safe: selectedDescriptorIndex] else { return }
-        imageActionsMenu(for: descriptor).popUp(
-            positioning: nil,
-            at: NSPoint(x: sender.bounds.minX, y: sender.bounds.minY),
-            in: sender
-        )
-    }
-
-    @objc func openImageSource(_ sender: NSMenuItem) {
+    @objc func openImageSource(_ sender: Any?) {
         guard let descriptor = descriptors[safe: selectedDescriptorIndex] else { return }
         NSWorkspace.shared.open(descriptor.copyrightUrl)
     }
@@ -182,13 +166,7 @@ class MenuController: NSObject {
 
     @MainActor
     @objc func togglePinnedWallpaper(_ sender: NSMenuItem) {
-        if sender.tag == MenuController.PIN_WALLPAPER_TAG,
-           settings.pinnedWallpaperID != nil {
-            settings.pinnedWallpaperID = nil
-            if let descriptor = descriptors[safe: selectedDescriptorIndex] {
-                WallpaperManager.shared.setWallpaper(descriptor: descriptor)
-            }
-        } else if let descriptor = descriptors[safe: selectedDescriptorIndex] {
+        if let descriptor = descriptors[safe: selectedDescriptorIndex] {
             if settings.pinnedWallpaperID == descriptor.wallpaperIdentifier {
                 settings.pinnedWallpaperID = nil
             } else {
@@ -297,28 +275,33 @@ class MenuController: NSObject {
             }
         }
         
-        let textItem = NSMenuItem(title: "", action: nil, keyEquivalent: "")
-        textItem.tag = MenuController.TEXT_VIEW_TAG
-        let textView = TextView(frame: CGRect(x: 0, y: 0, width: menu.size.width, height: 0))
-        let imageInfo = descriptor?.imageInfo
-        textView.descriptionLabel.stringValue = imageInfo?.title ?? ""
-        textView.copyrightLabel.stringValue = imageInfo?.copyright ?? ""
-        textView.button.action = #selector(imageInfoAction(_:))
-        textView.button.target = self
-        textView.button.toolTip = "Show image details and actions"
-        textItem.view = textView
-        
         if let oldTextItem = menu.item(withTag: MenuController.TEXT_VIEW_TAG) {
             menu.removeItem(oldTextItem)
         }
-        let imageView = menu.item(withTag: MenuController.IMAGE_VIEW_TAG)!
-        let textViewIndex = menu.index(of: imageView) + 1
-        menu.insertItem(textItem, at: textViewIndex)
+
+        let imageItem = menu.item(withTag: MenuController.IMAGE_VIEW_TAG)!
+        imageItem.submenu = nil
+        let textItemIndex = menu.index(of: imageItem) + 1
+        if let descriptor {
+            let info = descriptor.imageInfo
+            let textItem = NSMenuItem(title: info.title, action: nil, keyEquivalent: "")
+            textItem.tag = MenuController.TEXT_VIEW_TAG
+
+            let textView = TextView(frame: CGRect(x: 0, y: 0, width: menu.size.width, height: 0))
+            textView.descriptionLabel.stringValue = info.title
+            textView.copyrightLabel.stringValue = info.copyright
+            textView.button.action = nil
+            textView.button.target = nil
+            textView.button.toolTip = "Show image details and actions"
+            textItem.view = textView
+            textItem.submenu = imageActionsMenu(for: descriptor)
+            menu.insertItem(textItem, at: textItemIndex)
+        }
         
         imageSelectorView.leftButton.isEnabled = descriptors.indices.contains(newSelectedDescriptorIndex - 1)
         imageSelectorView.rightButton.isEnabled = descriptors.indices.contains(newSelectedDescriptorIndex + 1)
     }
-    
+
     private func imageActionsMenu(for descriptor: ImageDescriptor) -> NSMenu {
         let menu = NSMenu(title: "Wallpaper Details")
         let info = descriptor.imageInfo
@@ -377,20 +360,6 @@ class MenuController: NSObject {
         let allDescriptors = Database.instance.allImageDescriptors()
         let descriptorByID = allDescriptors.reduce(into: [String: ImageDescriptor]()) {
             $0[$1.wallpaperIdentifier] = $1
-        }
-
-        if let pinItem = menu.item(withTag: MenuController.PIN_WALLPAPER_TAG) {
-            if let pinnedID = settings.pinnedWallpaperID,
-               let pinnedDescriptor = descriptorByID[pinnedID] {
-                let title = pinnedDescriptor.imageInfo.title
-                let shortTitle = title.count > 45 ? String(title.prefix(42)) + "…" : title
-                pinItem.title = "Unpin Wallpaper: \(shortTitle)"
-                pinItem.image = NSImage(systemSymbolName: "pin.fill", accessibilityDescription: "Pinned wallpaper")
-            } else {
-                pinItem.title = "Pin Current Wallpaper"
-                pinItem.image = NSImage(systemSymbolName: "pin", accessibilityDescription: "Pin wallpaper")
-            }
-            pinItem.isEnabled = descriptors[safe: selectedDescriptorIndex] != nil
         }
 
         guard let favoritesItem = menu.item(withTag: MenuController.FAVORITES_TAG) else { return }
