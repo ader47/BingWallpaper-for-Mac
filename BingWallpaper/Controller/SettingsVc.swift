@@ -22,6 +22,120 @@ protocol SettingsVcDelegate: AnyObject {
     func hideMenuBarIcon()
 }
 
+private struct DisplayWallpaperOption {
+    let wallpaperID: String
+    let marketCode: String?
+    let title: String
+}
+
+@MainActor
+private final class DisplayProfileRowController: NSObject {
+    static let inheritSelection = "__inherit_global_wallpaper__"
+    static let latestSelection = "__follow_latest_wallpaper__"
+
+    let display: WallpaperDisplayInfo
+    let marketSelector: NSPopUpButton
+    let wallpaperSelector = NSPopUpButton(frame: .zero, pullsDown: false)
+
+    private let globalMarketCode: String?
+    private let wallpaperOptions: [DisplayWallpaperOption]
+
+    init(
+        display: WallpaperDisplayInfo,
+        marketSelector: NSPopUpButton,
+        profile: WallpaperDisplayProfile,
+        globalMarketCode: String?,
+        wallpaperOptions: [DisplayWallpaperOption]
+    ) {
+        self.display = display
+        self.marketSelector = marketSelector
+        self.globalMarketCode = globalMarketCode
+        self.wallpaperOptions = wallpaperOptions
+        super.init()
+
+        marketSelector.target = self
+        marketSelector.action = #selector(marketSelectionDidChange(_:))
+        rebuildWallpaperSelector(selecting: Self.selectionValue(for: profile))
+    }
+
+    var wallpaperSelection: String {
+        wallpaperSelector.selectedItem?.representedObject as? String
+            ?? Self.latestSelection
+    }
+
+    private static func selectionValue(for profile: WallpaperDisplayProfile) -> String {
+        switch profile.pinMode {
+        case .inherit:
+            return inheritSelection
+        case .followLatest:
+            return latestSelection
+        case .pinned:
+            return profile.pinnedWallpaperID ?? latestSelection
+        }
+    }
+
+    @objc private func marketSelectionDidChange(_ sender: NSPopUpButton) {
+        rebuildWallpaperSelector(selecting: Self.latestSelection)
+    }
+
+    private func effectiveMarketCode() -> String? {
+        let value = marketSelector.selectedItem?.representedObject as? String ?? "inherit"
+        switch value {
+        case "inherit":
+            return globalMarketCode
+        case "automatic":
+            return nil
+        default:
+            return BingMarketOption.supportedCodes.contains(value) ? value : globalMarketCode
+        }
+    }
+
+    private func rebuildWallpaperSelector(selecting selection: String) {
+        wallpaperSelector.removeAllItems()
+        addOption(
+            title: "Inherit Global Wallpaper",
+            value: Self.inheritSelection
+        )
+        addOption(
+            title: "Follow Latest in This Region",
+            value: Self.latestSelection
+        )
+
+        let matchingOptions = wallpaperOptions.filter {
+            $0.marketCode == effectiveMarketCode()
+        }
+        if matchingOptions.isEmpty {
+            let unavailableItem = NSMenuItem(
+                title: "No downloaded wallpapers for this region",
+                action: nil,
+                keyEquivalent: ""
+            )
+            unavailableItem.isEnabled = false
+            wallpaperSelector.menu?.addItem(.separator())
+            wallpaperSelector.menu?.addItem(unavailableItem)
+        } else {
+            wallpaperSelector.menu?.addItem(.separator())
+            for option in matchingOptions {
+                addOption(title: option.title, value: option.wallpaperID)
+            }
+        }
+
+        let selectedItem = wallpaperSelector.itemArray.first {
+            ($0.representedObject as? String) == selection
+        } ?? wallpaperSelector.itemArray.first {
+            ($0.representedObject as? String) == Self.latestSelection
+        }
+        wallpaperSelector.select(selectedItem)
+        wallpaperSelector.toolTip = selectedItem?.title
+    }
+
+    private func addOption(title: String, value: String) {
+        let item = NSMenuItem(title: title, action: nil, keyEquivalent: "")
+        item.representedObject = value
+        wallpaperSelector.menu?.addItem(item)
+    }
+}
+
 class SettingsVc: NSViewController {
     @IBOutlet var launchAtLoginCheckBox: NSButton!
     @IBOutlet weak var hideMenuBarIconCheckBox: NSButton!
@@ -392,23 +506,41 @@ class SettingsVc: NSViewController {
             return
         }
 
-        var controls = [(WallpaperDisplayInfo, NSPopUpButton, NSPopUpButton)]()
+        let descriptors = Database.instance.allImageDescriptors()
+            .filter { $0.image.isOnDisk() }
+        let wallpaperOptions = descriptors
+            .sorted(by: >)
+            .map { descriptor in
+                let info = descriptor.imageInfo
+                return DisplayWallpaperOption(
+                    wallpaperID: descriptor.wallpaperIdentifier,
+                    marketCode: descriptor.marketCode,
+                    title: "\(info.date) — \(info.title)"
+                )
+            }
+        var controls = [DisplayProfileRowController]()
         var rows = [[NSView]]()
         rows.append([
             profileHeader("Display"),
             profileHeader("Bing Region"),
-            profileHeader("Update Behavior")
+            profileHeader("Wallpaper")
         ])
         let profiles = settings.wallpaperDisplayProfiles
         for display in displays {
             let profile = profiles[display.identifier] ?? WallpaperDisplayProfile()
             let marketSelector = displayMarketSelector(for: profile)
-            let pinSelector = displayPinSelector(for: profile)
+            let rowController = DisplayProfileRowController(
+                display: display,
+                marketSelector: marketSelector,
+                profile: profile,
+                globalMarketCode: settings.bingMarketCode,
+                wallpaperOptions: wallpaperOptions
+            )
             let displayLabel = NSTextField(labelWithString: display.title)
             displayLabel.lineBreakMode = .byTruncatingTail
             displayLabel.toolTip = display.title
-            rows.append([displayLabel, marketSelector, pinSelector])
-            controls.append((display, marketSelector, pinSelector))
+            rows.append([displayLabel, marketSelector, rowController.wallpaperSelector])
+            controls.append(rowController)
         }
 
         let grid = NSGridView(views: rows)
@@ -416,17 +548,17 @@ class SettingsVc: NSViewController {
         grid.columnSpacing = 10
         grid.column(at: 0).width = 230
         grid.column(at: 1).width = 250
-        grid.column(at: 2).width = 170
+        grid.column(at: 2).width = 310
         grid.frame = NSRect(
             x: 0,
             y: 0,
-            width: 670,
+            width: 810,
             height: CGFloat(rows.count) * 34
         )
 
         let accessoryView: NSView
         if rows.count > 6 {
-            let scrollView = NSScrollView(frame: NSRect(x: 0, y: 0, width: 670, height: 220))
+            let scrollView = NSScrollView(frame: NSRect(x: 0, y: 0, width: 810, height: 220))
             scrollView.documentView = grid
             scrollView.hasVerticalScroller = true
             scrollView.drawsBackground = false
@@ -437,7 +569,7 @@ class SettingsVc: NSViewController {
 
         let alert = NSAlert()
         alert.messageText = "Configure Displays"
-        alert.informativeText = "Each display can inherit the global settings or use its own Bing region and update behavior. Disconnected display profiles remain saved."
+        alert.informativeText = "Each display can inherit the global wallpaper, follow the latest image in its own Bing region, or use a specific downloaded wallpaper. Disconnected display profiles remain saved."
         alert.alertStyle = .informational
         alert.icon = displayConfigurationIcon()
         alert.accessoryView = accessoryView
@@ -446,45 +578,37 @@ class SettingsVc: NSViewController {
         guard alert.runModal() == .alertFirstButtonReturn else { return }
 
         var updatedProfiles = profiles
-        let descriptors = Database.instance.allImageDescriptors()
-        for (display, marketSelector, pinSelector) in controls {
-            var profile = updatedProfiles[display.identifier] ?? WallpaperDisplayProfile()
-            applyMarketSelection(marketSelector, to: &profile)
-            let oldPinMode = profile.pinMode
-            profile.pinMode = WallpaperDisplayPinMode(
-                rawValue: pinSelector.selectedItem?.representedObject as? String ?? ""
-            ) ?? .inherit
-            if profile.pinMode != .pinned {
+        for control in controls {
+            var profile = updatedProfiles[control.display.identifier]
+                ?? WallpaperDisplayProfile()
+            applyMarketSelection(control.marketSelector, to: &profile)
+            switch control.wallpaperSelection {
+            case DisplayProfileRowController.inheritSelection:
+                profile.pinMode = .inherit
                 profile.pinnedWallpaperID = nil
-            } else {
+            case DisplayProfileRowController.latestSelection:
+                profile.pinMode = .followLatest
+                profile.pinnedWallpaperID = nil
+            case let wallpaperID:
                 let effectiveMarketCode = profile.effectiveMarketCode(
                     globalMarketCode: settings.bingMarketCode
                 )
-                let oldPinnedDescriptor = profile.pinnedWallpaperID.flatMap { pinnedID in
-                    descriptors.first { $0.wallpaperIdentifier == pinnedID }
-                }
-                if oldPinMode != .pinned || oldPinnedDescriptor?.marketCode != effectiveMarketCode {
-                    let currentWallpaperID = WallpaperManager.currentWallpaperIdentifier(
-                        forDisplayIdentifier: display.identifier
-                    )
-                    let currentDescriptor = currentWallpaperID.flatMap { wallpaperID in
-                        descriptors.first { $0.wallpaperIdentifier == wallpaperID }
-                    }
-                    profile.pinnedWallpaperID = currentDescriptor?.marketCode == effectiveMarketCode
-                        ? currentDescriptor?.wallpaperIdentifier
-                        : descriptors
-                            .filter {
-                                $0.marketCode == effectiveMarketCode && $0.image.isOnDisk()
-                            }
-                            .max()?
-                            .wallpaperIdentifier
+                if descriptors.contains(where: {
+                    $0.wallpaperIdentifier == wallpaperID &&
+                        $0.marketCode == effectiveMarketCode
+                }) {
+                    profile.pinMode = .pinned
+                    profile.pinnedWallpaperID = wallpaperID
+                } else {
+                    profile.pinMode = .followLatest
+                    profile.pinnedWallpaperID = nil
                 }
             }
 
             if profile.isDefault {
-                updatedProfiles.removeValue(forKey: display.identifier)
+                updatedProfiles.removeValue(forKey: control.display.identifier)
             } else {
-                updatedProfiles[display.identifier] = profile
+                updatedProfiles[control.display.identifier] = profile
             }
         }
 
@@ -528,17 +652,6 @@ class SettingsVc: NSViewController {
         }
         selector.select(selector.itemArray.first(where: {
             ($0.representedObject as? String) == selectedValue
-        }))
-        return selector
-    }
-
-    private func displayPinSelector(for profile: WallpaperDisplayProfile) -> NSPopUpButton {
-        let selector = NSPopUpButton(frame: .zero, pullsDown: false)
-        addProfileOption(title: "Inherit Global", value: WallpaperDisplayPinMode.inherit.rawValue, to: selector)
-        addProfileOption(title: "Follow Latest", value: WallpaperDisplayPinMode.followLatest.rawValue, to: selector)
-        addProfileOption(title: "Pin Current", value: WallpaperDisplayPinMode.pinned.rawValue, to: selector)
-        selector.select(selector.itemArray.first(where: {
-            ($0.representedObject as? String) == profile.pinMode.rawValue
         }))
         return selector
     }
