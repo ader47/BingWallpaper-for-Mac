@@ -357,6 +357,7 @@ class SettingsVc: NSViewController {
         alert.messageText = "Choose displays"
         alert.informativeText = "BingWallpaper will update only the selected displays. Disconnected displays remain selected and will resume when reconnected."
         alert.alertStyle = .informational
+        alert.icon = displayConfigurationIcon()
         alert.accessoryView = stackView
         alert.addButton(withTitle: "Apply")
         alert.addButton(withTitle: "Cancel")
@@ -440,6 +441,7 @@ class SettingsVc: NSViewController {
         alert.messageText = "Configure Displays"
         alert.informativeText = "Each display can inherit the global settings or use its own Bing region and update behavior. Disconnected display profiles remain saved."
         alert.alertStyle = .informational
+        alert.icon = displayConfigurationIcon()
         alert.accessoryView = accessoryView
         alert.addButton(withTitle: "Apply")
         alert.addButton(withTitle: "Cancel")
@@ -492,6 +494,12 @@ class SettingsVc: NSViewController {
         refreshDisplayProfilesButton()
         delegate?.wallpaperDisplaySelectionDidChange()
         updateManager?.update()
+    }
+
+    private func displayConfigurationIcon() -> NSImage? {
+        let configuration = NSImage.SymbolConfiguration(pointSize: 48, weight: .regular)
+        return NSImage(systemSymbolName: "display.2", accessibilityDescription: "Displays")?
+            .withSymbolConfiguration(configuration)
     }
 
     private func profileHeader(_ title: String) -> NSTextField {
