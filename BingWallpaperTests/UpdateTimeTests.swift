@@ -656,6 +656,32 @@ final class FavoriteWallpaperSettingsTests: XCTestCase {
         }
     }
 
+    func testResetClearsPinsWithoutLeavingPinnedProfiles() {
+        withSettings { settings in
+            settings.favoriteWallpaperIDs = ["en-US:20250102"]
+            settings.pinnedWallpaperID = "en-US:20250102"
+            settings.wallpaperDisplayProfiles = [
+                "display": WallpaperDisplayProfile(
+                    marketMode: .explicit,
+                    marketCode: "en-US",
+                    pinMode: .pinned,
+                    pinnedWallpaperID: "en-US:20250102"
+                )
+            ]
+
+            settings.resetWallpaperLibrarySelections()
+
+            XCTAssertTrue(settings.favoriteWallpaperIDs.isEmpty)
+            XCTAssertNil(settings.pinnedWallpaperID)
+            XCTAssertEqual(
+                settings.wallpaperDisplayProfiles["display"]?.pinMode,
+                .followLatest
+            )
+            XCTAssertNil(settings.wallpaperDisplayProfiles["display"]?.pinnedWallpaperID)
+            XCTAssertEqual(settings.wallpaperDisplayProfiles["display"]?.marketCode, "en-US")
+        }
+    }
+
     private func withSettings(_ operation: (Settings) -> Void) {
         let suiteName = "BingWallpaperTests.\(UUID().uuidString)"
         let defaults = UserDefaults(suiteName: suiteName)!

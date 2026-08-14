@@ -271,13 +271,7 @@ class SettingsVc: NSViewController {
         logger.info("Resetting Database...")
         do {
             try Database.instance.deleteAllImageDescriptors()
-            settings.favoriteWallpaperIDs = []
-            settings.pinnedWallpaperID = nil
-            settings.wallpaperDisplayProfiles = settings.wallpaperDisplayProfiles.mapValues { profile in
-                var profile = profile
-                profile.pinnedWallpaperID = nil
-                return profile
-            }
+            settings.resetWallpaperLibrarySelections()
             delegate?.wallpaperDatabaseDidReset()
             updateManager?.update()
         } catch let error {

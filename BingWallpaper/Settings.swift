@@ -326,6 +326,19 @@ public class Settings {
             return profile
         }
     }
+
+    func resetWallpaperLibrarySelections() {
+        favoriteWallpaperIDs = []
+        pinnedWallpaperID = nil
+        wallpaperDisplayProfiles = wallpaperDisplayProfiles.mapValues { profile in
+            var profile = profile
+            if profile.pinMode == .pinned {
+                profile.pinMode = .followLatest
+            }
+            profile.pinnedWallpaperID = nil
+            return profile
+        }
+    }
     
     public var lastUpdate: Date {
         get {
