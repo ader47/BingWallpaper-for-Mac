@@ -4,8 +4,13 @@ import Cocoa
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private let menuController = MenuController()
+    private var isRunningUnitTests: Bool {
+        ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil
+    }
     
     func applicationDidFinishLaunching(_ aNotification: Notification) {
+        guard !isRunningUnitTests else { return }
+
         FileHandler.createWallpaperFolderIfNeeded()
         _ = Database.instance.persistentContainer
         let existingDescriptors = Database.instance.allImageDescriptors()
@@ -34,6 +39,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
     
     func applicationDidBecomeActive(_ notification: Notification) {
+        guard !isRunningUnitTests else { return }
+
         menuController.showSettingsWc(sender: nil)
     }
     
