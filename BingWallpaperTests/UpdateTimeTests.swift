@@ -103,6 +103,43 @@ final class ImageDirectorySettingsTests: XCTestCase {
     }
 }
 
+final class FileHandlerCleanupTests: XCTestCase {
+    func testDeletesOnlyExplicitlyManagedWallpaperFiles() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("BingWallpaperCleanupTests-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        let managedFile = directory.appendingPathComponent("en-US_20250101.jpg")
+        let unrelatedFile = directory.appendingPathComponent("vacation_20200101.png")
+        try Data("managed".utf8).write(to: managedFile)
+        try Data("personal".utf8).write(to: unrelatedFile)
+
+        FileHandler.deleteImages(
+            fileNames: [managedFile.lastPathComponent],
+            from: directory
+        )
+
+        XCTAssertFalse(FileManager.default.fileExists(atPath: managedFile.path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: unrelatedFile.path))
+    }
+
+    func testRejectsFileNamesThatEscapeWallpaperDirectory() throws {
+        let parent = FileManager.default.temporaryDirectory
+            .appendingPathComponent("BingWallpaperCleanupTests-\(UUID().uuidString)", isDirectory: true)
+        let directory = parent.appendingPathComponent("wallpapers", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: parent) }
+
+        let outsideFile = parent.appendingPathComponent("keep.jpg")
+        try Data("personal".utf8).write(to: outsideFile)
+
+        FileHandler.deleteImages(fileNames: ["../keep.jpg"], from: directory)
+
+        XCTAssertTrue(FileManager.default.fileExists(atPath: outsideFile.path))
+    }
+}
+
 final class WallpaperManagerTests: XCTestCase {
     func testEquivalentFileURLsMatch() {
         let currentURL = URL(fileURLWithPath: "/tmp/wallpapers/../wallpapers/current.jpg")

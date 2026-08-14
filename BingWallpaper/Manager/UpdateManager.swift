@@ -161,19 +161,15 @@ final class UpdateManager: @unchecked Sendable {
                 preservedIDs.insert(pinnedWallpaperID)
             }
         }
-        let preservedFileNames = Set(
-            Database.instance.allImageDescriptors()
-                .filter { preservedIDs.contains($0.wallpaperIdentifier) }
-                .map { $0.image.fileName }
-        )
-        try? Database.instance.deleteImageDescriptors(
-            olderThan: oldestDateStringToKeep,
-            preserving: preservedIDs
-        )
-        FileHandler.deleteOldImages(
-            oldestDateStringToKeep: oldestDateStringToKeep,
-            preservingFileNames: preservedFileNames
-        )
+        do {
+            let deletedFileNames = try Database.instance.deleteImageDescriptors(
+                olderThan: oldestDateStringToKeep,
+                preserving: preservedIDs
+            )
+            FileHandler.deleteImages(fileNames: deletedFileNames)
+        } catch {
+            logger.error("Failed to clean up old wallpapers: \(error.localizedDescription, privacy: .public)")
+        }
     }
     
     private func setupObserver() {

@@ -39,20 +39,22 @@ class Database {
     }
     
     @MainActor
+    @discardableResult
     func deleteImageDescriptors(
         olderThan oldestDateStringToKeep: String,
         preserving wallpaperIDs: Set<String> = []
-    ) throws {
+    ) throws -> Set<String> {
         let managedContext = persistentContainer.viewContext
-        
-        allImageDescriptors()
+        let descriptorsToDelete = allImageDescriptors()
             .filter {
                 $0.startDate <= oldestDateStringToKeep &&
                     wallpaperIDs.contains($0.wallpaperIdentifier) == false
             }
-            .forEach { managedContext.delete($0) }
+        let deletedFileNames = Set(descriptorsToDelete.map { $0.image.fileName })
+        descriptorsToDelete.forEach { managedContext.delete($0) }
         
         try managedContext.save()
+        return deletedFileNames
     }
     
     @MainActor

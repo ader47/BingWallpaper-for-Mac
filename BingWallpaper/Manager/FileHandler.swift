@@ -94,22 +94,35 @@ class FileHandler {
         }
     }
     
-    static func deleteOldImages(
-        oldestDateStringToKeep: String,
-        preservingFileNames: Set<String> = []
+    static func deleteImages(fileNames: Set<String>) {
+        withWallpaperDirectoryAccess { directory in
+            deleteImages(fileNames: fileNames, from: directory)
+        }
+    }
+
+    static func deleteImages(
+        fileNames: Set<String>,
+        from directory: URL,
+        fileManager: FileManager = .default
     ) {
-        getSavedImages()
-            .filter { imageUrl in
-                guard preservingFileNames.contains(imageUrl.lastPathComponent) == false else {
-                    return false
-                }
-                let fileName = imageUrl.deletingPathExtension().lastPathComponent
-                let dateString = String(fileName.suffix(8))
-                return dateString.count == 8 &&
-                    dateString.allSatisfy(\.isNumber) &&
-                    dateString <= oldestDateStringToKeep
+        for fileName in fileNames {
+            // Only accept a single path component. The names currently come from
+            // persisted wallpaper descriptors, but this keeps cleanup contained
+            // even if that data is ever corrupted.
+            guard URL(fileURLWithPath: fileName).lastPathComponent == fileName else {
+                logger.error("Refusing to delete unsafe wallpaper file name: \(fileName, privacy: .public)")
+                continue
             }
-            .forEach { removeImageFromDisk(imagePath: $0) }
+
+            let fileURL = directory.appendingPathComponent(fileName, isDirectory: false)
+            do {
+                if fileManager.fileExists(atPath: fileURL.path) {
+                    try fileManager.removeItem(at: fileURL)
+                }
+            } catch {
+                logger.error("Failed to remove image at \(fileURL.path, privacy: .public): \(error.localizedDescription, privacy: .public)")
+            }
+        }
     }
     
     static func savePkgInstallerToDisk(pkgInstaller: Data, appVersion: String) -> URL? {
