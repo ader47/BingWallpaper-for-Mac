@@ -1,7 +1,5 @@
 import Cocoa
 
-// TODO: @2h4u create and add icon (app icon and menubar icon)
-
 @main
 class AppDelegate: NSObject, NSApplicationDelegate {
     private let menuController = MenuController()
