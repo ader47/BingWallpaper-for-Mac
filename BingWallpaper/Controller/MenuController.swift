@@ -324,17 +324,27 @@ class MenuController: NSObject {
         addImageAction(
             title: isFavorite ? "Remove from Favorites" : "Add to Favorites",
             selector: #selector(toggleFavorite(_:)),
+            systemImageName: isFavorite ? "star.slash" : "star",
             to: menu
         )
         let pinTitle: String
+        let pinImageName: String
         if settings.pinnedWallpaperID == descriptor.wallpaperIdentifier {
             pinTitle = "Unpin Wallpaper"
+            pinImageName = "pin.slash"
         } else if settings.pinnedWallpaperID == nil {
             pinTitle = "Pin This Wallpaper"
+            pinImageName = "pin"
         } else {
             pinTitle = "Replace Pinned Wallpaper"
+            pinImageName = "pin.fill"
         }
-        addImageAction(title: pinTitle, selector: #selector(togglePinnedWallpaper(_:)), to: menu)
+        addImageAction(
+            title: pinTitle,
+            selector: #selector(togglePinnedWallpaper(_:)),
+            systemImageName: pinImageName,
+            to: menu
+        )
 
         menu.addItem(.separator())
         addImageAction(title: "Open Source on Bing", selector: #selector(openImageSource(_:)), to: menu)
@@ -351,9 +361,17 @@ class MenuController: NSObject {
         menu.addItem(item)
     }
 
-    private func addImageAction(title: String, selector: Selector, to menu: NSMenu) {
+    private func addImageAction(
+        title: String,
+        selector: Selector,
+        systemImageName: String? = nil,
+        to menu: NSMenu
+    ) {
         let item = NSMenuItem(title: title, action: selector, keyEquivalent: "")
         item.target = self
+        if let systemImageName {
+            item.image = NSImage(systemSymbolName: systemImageName, accessibilityDescription: title)
+        }
         menu.addItem(item)
     }
 
@@ -392,7 +410,10 @@ class MenuController: NSObject {
         favoritesItem.title = favoriteDescriptors.isEmpty
             ? "Favorites"
             : "Favorites (\(favoriteDescriptors.count))"
-        favoritesItem.image = NSImage(systemSymbolName: "star", accessibilityDescription: "Favorite wallpapers")
+        favoritesItem.image = NSImage(
+            systemSymbolName: favoriteDescriptors.isEmpty ? "star" : "star.fill",
+            accessibilityDescription: "Favorite wallpapers"
+        )
         favoritesItem.submenu = favoritesMenu
     }
 
