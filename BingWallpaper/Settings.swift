@@ -42,6 +42,23 @@ struct BingMarketOption: Equatable {
     }
 }
 
+enum WallpaperDisplayMode: String, CaseIterable {
+    case all
+    case main
+    case selected
+
+    var title: String {
+        switch self {
+        case .all:
+            return "All Displays"
+        case .main:
+            return "Main Display Only"
+        case .selected:
+            return "Selected Displays…"
+        }
+    }
+}
+
 public class Settings {
     private let defaults: UserDefaults
 
@@ -171,6 +188,28 @@ public class Settings {
             }
         }
     }
+
+    var wallpaperDisplayMode: WallpaperDisplayMode {
+        get {
+            guard let rawValue = defaults.string(forKey: Settings.WALLPAPER_DISPLAY_MODE),
+                  let mode = WallpaperDisplayMode(rawValue: rawValue) else {
+                return .all
+            }
+            return mode
+        }
+        set {
+            defaults.set(newValue.rawValue, forKey: Settings.WALLPAPER_DISPLAY_MODE)
+        }
+    }
+
+    var selectedWallpaperDisplayIDs: Set<String> {
+        get {
+            return Set(defaults.stringArray(forKey: Settings.SELECTED_WALLPAPER_DISPLAY_IDS) ?? [])
+        }
+        set {
+            defaults.set(newValue.sorted(), forKey: Settings.SELECTED_WALLPAPER_DISPLAY_IDS)
+        }
+    }
     
     public var lastUpdate: Date {
         get {
@@ -237,6 +276,8 @@ public class Settings {
     private static let IMAGE_DOWNLOAD_PATH = "IMAGE_DOWNLOAD_PATH"
     private static let IMAGE_DOWNLOAD_PATH_BOOKMARK = "IMAGE_DOWNLOAD_PATH_BOOKMARK"
     private static let BING_MARKET_CODE = "BING_MARKET_CODE"
+    private static let WALLPAPER_DISPLAY_MODE = "WALLPAPER_DISPLAY_MODE"
+    private static let SELECTED_WALLPAPER_DISPLAY_IDS = "SELECTED_WALLPAPER_DISPLAY_IDS"
     private static let LAST_UPDATE = "LAST_UPDATE"
     private static let KEEP_IMAGE_DURATION = "KEEP_IMAGE_DURATION"
 }

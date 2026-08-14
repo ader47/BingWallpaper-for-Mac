@@ -11,6 +11,8 @@ protocol SettingsVcDelegate: AnyObject {
     @MainActor
     func bingMarketDidChange()
     @MainActor
+    func wallpaperDisplaySelectionDidChange()
+    @MainActor
     func wallpaperStorageDidChange()
     @MainActor
     func showMenuBarIcon()
@@ -27,6 +29,8 @@ class SettingsVc: NSViewController {
 
     private let bingMarketLabel = NSTextField(labelWithString: "Bing region:")
     private let bingMarketPopUpButton = NSPopUpButton(frame: .zero, pullsDown: false)
+    private let wallpaperDisplayLabel = NSTextField(labelWithString: "Apply wallpaper to:")
+    private let wallpaperDisplayPopUpButton = NSPopUpButton(frame: .zero, pullsDown: false)
     
     private let settings = Settings()
     weak var delegate: SettingsVcDelegate?
@@ -43,11 +47,13 @@ class SettingsVc: NSViewController {
         keepImagesSlider.integerValue = settings.keepImageDuration
         setKeepImagesText()
         setupBingMarketSelector()
+        setupWallpaperDisplaySelector()
     }
 
     override func viewWillAppear() {
         super.viewWillAppear()
         refreshLaunchAtLoginCheckbox()
+        refreshWallpaperDisplaySelector()
     }
 
     // MARK: - Actions
@@ -111,6 +117,25 @@ class SettingsVc: NSViewController {
         guard oldMarketCode != settings.bingMarketCode else { return }
         delegate?.bingMarketDidChange()
         updateManager?.update()
+    }
+
+    @objc private func wallpaperDisplayAction(_ sender: NSPopUpButton) {
+        let oldMode = settings.wallpaperDisplayMode
+        guard let rawValue = sender.selectedItem?.representedObject as? String,
+              let newMode = WallpaperDisplayMode(rawValue: rawValue) else {
+            refreshWallpaperDisplaySelector()
+            return
+        }
+
+        if newMode == .selected, !presentWallpaperDisplaySelection() {
+            selectWallpaperDisplayMode(oldMode)
+            return
+        }
+
+        settings.wallpaperDisplayMode = newMode
+        refreshWallpaperDisplaySelector()
+        guard oldMode != newMode || newMode == .selected else { return }
+        delegate?.wallpaperDisplaySelectionDidChange()
     }
     
     @IBAction func keepImagesSliderAction(_ sender: NSSlider) {
@@ -186,6 +211,121 @@ class SettingsVc: NSViewController {
         ])
 
         preferredContentSize = NSSize(width: view.frame.width, height: view.frame.height + 40)
+    }
+
+    private func setupWallpaperDisplaySelector() {
+        wallpaperDisplayLabel.translatesAutoresizingMaskIntoConstraints = false
+        wallpaperDisplayPopUpButton.translatesAutoresizingMaskIntoConstraints = false
+        wallpaperDisplayPopUpButton.target = self
+        wallpaperDisplayPopUpButton.action = #selector(wallpaperDisplayAction(_:))
+        view.addSubview(wallpaperDisplayLabel)
+        view.addSubview(wallpaperDisplayPopUpButton)
+        refreshWallpaperDisplaySelector()
+
+        if let imageTopConstraint = view.constraints.first(where: {
+            ($0.firstItem as? NSView) === imagePathButton &&
+            $0.firstAttribute == .top &&
+            ($0.secondItem as? NSView) === bingMarketPopUpButton &&
+            $0.secondAttribute == .bottom
+        }) {
+            NSLayoutConstraint.deactivate([imageTopConstraint])
+        }
+
+        NSLayoutConstraint.activate([
+            wallpaperDisplayPopUpButton.topAnchor.constraint(equalTo: bingMarketPopUpButton.bottomAnchor, constant: 12),
+            wallpaperDisplayPopUpButton.leadingAnchor.constraint(equalTo: imagePathButton.leadingAnchor),
+            wallpaperDisplayPopUpButton.widthAnchor.constraint(equalTo: imagePathButton.widthAnchor),
+            imagePathButton.topAnchor.constraint(equalTo: wallpaperDisplayPopUpButton.bottomAnchor, constant: 12),
+            wallpaperDisplayLabel.trailingAnchor.constraint(equalTo: wallpaperDisplayPopUpButton.leadingAnchor, constant: -8),
+            wallpaperDisplayLabel.centerYAnchor.constraint(equalTo: wallpaperDisplayPopUpButton.centerYAnchor)
+        ])
+
+        preferredContentSize = NSSize(width: preferredContentSize.width, height: preferredContentSize.height + 40)
+    }
+
+    private func refreshWallpaperDisplaySelector() {
+        let selectedCount = settings.selectedWallpaperDisplayIDs.count
+        wallpaperDisplayPopUpButton.removeAllItems()
+        for mode in WallpaperDisplayMode.allCases {
+            let title: String
+            if mode == .selected, selectedCount > 0 {
+                title = "Selected Displays (\(selectedCount))…"
+            } else {
+                title = mode.title
+            }
+            let item = NSMenuItem(title: title, action: nil, keyEquivalent: "")
+            item.representedObject = mode.rawValue
+            wallpaperDisplayPopUpButton.menu?.addItem(item)
+        }
+        selectWallpaperDisplayMode(settings.wallpaperDisplayMode)
+    }
+
+    private func selectWallpaperDisplayMode(_ mode: WallpaperDisplayMode) {
+        guard let item = wallpaperDisplayPopUpButton.itemArray.first(where: {
+            ($0.representedObject as? String) == mode.rawValue
+        }) else { return }
+        wallpaperDisplayPopUpButton.select(item)
+    }
+
+    private func presentWallpaperDisplaySelection() -> Bool {
+        let displays = WallpaperManager.connectedDisplays()
+        guard !displays.isEmpty else {
+            let alert = NSAlert()
+            alert.messageText = "No displays are available"
+            alert.informativeText = "Connect a display and try again."
+            alert.alertStyle = .warning
+            alert.addButton(withTitle: "OK")
+            alert.runModal()
+            return false
+        }
+
+        let previouslySelected = settings.selectedWallpaperDisplayIDs
+        let initiallySelected: Set<String>
+        if previouslySelected.isEmpty {
+            initiallySelected = Set(displays.filter(\.isMain).map(\.identifier))
+        } else {
+            initiallySelected = previouslySelected
+        }
+
+        let stackView = NSStackView()
+        stackView.orientation = .vertical
+        stackView.alignment = .leading
+        stackView.spacing = 8
+        var checkBoxes = [NSButton]()
+        for display in displays {
+            let checkBox = NSButton(checkboxWithTitle: display.title, target: nil, action: nil)
+            checkBox.state = initiallySelected.contains(display.identifier) ? .on : .off
+            checkBoxes.append(checkBox)
+            stackView.addArrangedSubview(checkBox)
+        }
+        stackView.frame = NSRect(x: 0, y: 0, width: 420, height: max(28, CGFloat(displays.count) * 26))
+
+        let alert = NSAlert()
+        alert.messageText = "Choose displays"
+        alert.informativeText = "BingWallpaper will update only the selected displays. Disconnected displays remain selected and will resume when reconnected."
+        alert.alertStyle = .informational
+        alert.accessoryView = stackView
+        alert.addButton(withTitle: "Apply")
+        alert.addButton(withTitle: "Cancel")
+        guard alert.runModal() == .alertFirstButtonReturn else { return false }
+
+        let connectedIDs = Set(displays.map(\.identifier))
+        let disconnectedSelections = previouslySelected.subtracting(connectedIDs)
+        let checkedIDs = Set(zip(displays, checkBoxes).compactMap { display, checkBox in
+            checkBox.state == .on ? display.identifier : nil
+        })
+        let newSelection = disconnectedSelections.union(checkedIDs)
+        guard !newSelection.isEmpty else {
+            let emptyAlert = NSAlert()
+            emptyAlert.messageText = "Select at least one display"
+            emptyAlert.alertStyle = .warning
+            emptyAlert.addButton(withTitle: "OK")
+            emptyAlert.runModal()
+            return false
+        }
+
+        settings.selectedWallpaperDisplayIDs = newSelection
+        return true
     }
 
     private func promptToApproveLoginItem() {

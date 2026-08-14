@@ -123,4 +123,71 @@ final class WallpaperManagerTests: XCTestCase {
 
         XCTAssertFalse(WallpaperManager.wallpaperURL(nil, matches: desiredURL))
     }
+
+    func testAllDisplayModeTargetsEveryDisplay() {
+        XCTAssertTrue(WallpaperManager.shouldApplyWallpaper(
+            toDisplayIdentifier: nil,
+            isMainDisplay: false,
+            mode: .all,
+            selectedDisplayIDs: []
+        ))
+    }
+
+    func testMainDisplayModeTargetsOnlyMainDisplay() {
+        XCTAssertTrue(WallpaperManager.shouldApplyWallpaper(
+            toDisplayIdentifier: "main",
+            isMainDisplay: true,
+            mode: .main,
+            selectedDisplayIDs: []
+        ))
+        XCTAssertFalse(WallpaperManager.shouldApplyWallpaper(
+            toDisplayIdentifier: "secondary",
+            isMainDisplay: false,
+            mode: .main,
+            selectedDisplayIDs: []
+        ))
+    }
+
+    func testSelectedDisplayModeTargetsOnlySelectedIdentifiers() {
+        let selectedDisplayIDs: Set<String> = ["secondary"]
+
+        XCTAssertTrue(WallpaperManager.shouldApplyWallpaper(
+            toDisplayIdentifier: "secondary",
+            isMainDisplay: false,
+            mode: .selected,
+            selectedDisplayIDs: selectedDisplayIDs
+        ))
+        XCTAssertFalse(WallpaperManager.shouldApplyWallpaper(
+            toDisplayIdentifier: "main",
+            isMainDisplay: true,
+            mode: .selected,
+            selectedDisplayIDs: selectedDisplayIDs
+        ))
+    }
+}
+
+final class WallpaperDisplaySettingsTests: XCTestCase {
+    func testDefaultsToAllDisplays() {
+        withSettings { settings in
+            XCTAssertEqual(settings.wallpaperDisplayMode, .all)
+            XCTAssertTrue(settings.selectedWallpaperDisplayIDs.isEmpty)
+        }
+    }
+
+    func testPersistsSelectedDisplays() {
+        withSettings { settings in
+            settings.wallpaperDisplayMode = .selected
+            settings.selectedWallpaperDisplayIDs = ["display-b", "display-a"]
+
+            XCTAssertEqual(settings.wallpaperDisplayMode, .selected)
+            XCTAssertEqual(settings.selectedWallpaperDisplayIDs, ["display-a", "display-b"])
+        }
+    }
+
+    private func withSettings(_ operation: (Settings) -> Void) {
+        let suiteName = "BingWallpaperTests.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        operation(Settings(defaults: defaults))
+    }
 }

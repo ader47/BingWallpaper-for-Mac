@@ -227,6 +227,10 @@ extension MenuController: SettingsVcDelegate {
         showNewestImage()
     }
 
+    func wallpaperDisplaySelectionDidChange() {
+        WallpaperManager.shared.refreshWallpaper()
+    }
+
     func wallpaperStorageDidChange() {
         showNewestImage()
     }
