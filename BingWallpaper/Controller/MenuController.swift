@@ -14,6 +14,7 @@ final class MenuController: NSObject {
     private let settings = Settings()
     private var descriptors = [ImageDescriptor]()
     private var selectedDescriptorIndex = 0
+    private var activeDisplayIdentifier: String?
     private var imageLoadGeneration = 0
     private var imageSelectorView: ImageSelectorView!
     var updateManager: UpdateManager?
@@ -22,6 +23,7 @@ final class MenuController: NSObject {
     private static let UPDATE_STATUS_TAG = 8
     private static let REFRESH_IMAGES_TAG = 9
     private static let FAVORITES_TAG = 11
+    private static let ACTIVE_DISPLAY_TAG = 12
     private lazy var settingsWc = SettingsWc.instance()
     
     // MARK: - UI setup
@@ -71,6 +73,19 @@ final class MenuController: NSObject {
         menu.addItem(imageItem)
         
         menu.addItem(NSMenuItem.separator())
+
+        let activeDisplayItem = NSMenuItem(
+            title: "Display",
+            action: nil,
+            keyEquivalent: ""
+        )
+        activeDisplayItem.tag = MenuController.ACTIVE_DISPLAY_TAG
+        activeDisplayItem.image = NSImage(
+            systemSymbolName: "display",
+            accessibilityDescription: "Current display"
+        )
+        activeDisplayItem.isEnabled = false
+        menu.addItem(activeDisplayItem)
 
         let updateStatusItem = NSMenuItem(title: "Update Status", action: nil, keyEquivalent: "")
         updateStatusItem.tag = MenuController.UPDATE_STATUS_TAG
@@ -170,7 +185,23 @@ final class MenuController: NSObject {
 
     @MainActor
     @objc func togglePinnedWallpaper(_ sender: NSMenuItem) {
-        if let descriptor = descriptors[safe: selectedDescriptorIndex] {
+        guard let descriptor = descriptors[safe: selectedDescriptorIndex] else {
+            return
+        }
+        if let activeDisplayIdentifier {
+            let profile = settings.wallpaperDisplayProfiles[activeDisplayIdentifier]
+            if profile?.pinMode == .pinned,
+               profile?.pinnedWallpaperID == descriptor.wallpaperIdentifier {
+                WallpaperManager.shared.followLatestWallpaper(
+                    forDisplayIdentifier: activeDisplayIdentifier
+                )
+            } else {
+                WallpaperManager.shared.setWallpaper(
+                    descriptor: descriptor,
+                    forDisplayIdentifier: activeDisplayIdentifier
+                )
+            }
+        } else {
             if settings.pinnedWallpaperID == descriptor.wallpaperIdentifier {
                 settings.pinnedWallpaperID = nil
                 showNewestImage()
@@ -197,10 +228,17 @@ final class MenuController: NSObject {
             return
         }
         selectedDescriptorIndex = index
-        if settings.pinnedWallpaperID != nil {
-            settings.pinnedWallpaperID = wallpaperID
+        if let activeDisplayIdentifier {
+            WallpaperManager.shared.setWallpaper(
+                descriptor: descriptor,
+                forDisplayIdentifier: activeDisplayIdentifier
+            )
+        } else {
+            if settings.pinnedWallpaperID != nil {
+                settings.pinnedWallpaperID = wallpaperID
+            }
+            WallpaperManager.shared.setWallpaper(descriptor: descriptor)
         }
-        WallpaperManager.shared.setWallpaper(descriptor: descriptor)
         updateImageSelectorView(newSelectedDescriptorIndex: index)
     }
 
@@ -246,9 +284,15 @@ final class MenuController: NSObject {
     
     @MainActor
     private func updateSelectedImage(newSelectedDescriptorIndex: Int) {
-        guard settings.pinnedWallpaperID == nil else { return }
         if let descriptor = descriptors[safe: newSelectedDescriptorIndex] {
-            WallpaperManager.shared.setWallpaper(descriptor: descriptor)
+            if let activeDisplayIdentifier {
+                WallpaperManager.shared.setWallpaper(
+                    descriptor: descriptor,
+                    forDisplayIdentifier: activeDisplayIdentifier
+                )
+            } else if settings.pinnedWallpaperID == nil {
+                WallpaperManager.shared.setWallpaper(descriptor: descriptor)
+            }
         }
     }
     
@@ -331,11 +375,20 @@ final class MenuController: NSObject {
         )
         let pinTitle: String
         let pinImageName: String
-        if settings.pinnedWallpaperID == descriptor.wallpaperIdentifier {
+        let activePinnedWallpaperID = activeDisplayIdentifier.flatMap {
+            settings.wallpaperDisplayProfiles[$0]
+        }.flatMap { profile in
+            profile.pinMode == .pinned ? profile.pinnedWallpaperID : nil
+        }
+        if activePinnedWallpaperID == descriptor.wallpaperIdentifier ||
+            (activeDisplayIdentifier == nil &&
+                settings.pinnedWallpaperID == descriptor.wallpaperIdentifier) {
             pinTitle = "Unpin Wallpaper"
             pinImageName = "pin.slash"
-        } else if settings.pinnedWallpaperID == nil {
-            pinTitle = "Pin This Wallpaper"
+        } else if activeDisplayIdentifier != nil || settings.pinnedWallpaperID == nil {
+            pinTitle = activeDisplayIdentifier == nil
+                ? "Pin This Wallpaper"
+                : "Pin This Wallpaper on This Display"
             pinImageName = "pin"
         } else {
             pinTitle = "Replace Pinned Wallpaper"
@@ -515,10 +568,70 @@ final class MenuController: NSObject {
         } ?? descriptors.count - 1
         if let pinnedDescriptor {
             WallpaperManager.shared.setWallpaper(descriptor: pinnedDescriptor)
+        } else if let newestDescriptor = descriptors[safe: selectedDescriptorIndex] {
+            WallpaperManager.shared.setWallpaper(descriptor: newestDescriptor)
         } else {
-            updateSelectedImage(newSelectedDescriptorIndex: selectedDescriptorIndex)
+            imageSelectorView?.imageView.image = nil
         }
         updateFavoriteMenus()
+    }
+
+    private func showWallpaperForMenuDisplay() {
+        activeDisplayIdentifier = WallpaperManager.displayIdentifier(
+            at: NSEvent.mouseLocation
+        )
+        guard let activeDisplayIdentifier else {
+            showNewestImage()
+            return
+        }
+
+        let downloadedDescriptors = Database.instance.allImageDescriptors()
+            .filter { $0.image.isOnDisk() }
+        let profile = settings.wallpaperDisplayProfiles[activeDisplayIdentifier]
+            ?? WallpaperDisplayProfile()
+        let currentWallpaperID = WallpaperManager.currentWallpaperIdentifier(
+            forDisplayIdentifier: activeDisplayIdentifier
+        )
+        let effectiveMarketCode = profile.effectiveMarketCode(
+            globalMarketCode: settings.bingMarketCode
+        )
+
+        let configuredWallpaperID: String?
+        if profile.pinMode == .pinned {
+            configuredWallpaperID = profile.pinnedWallpaperID
+        } else if profile.pinMode == .inherit,
+                  let globallyPinnedWallpaperID = settings.pinnedWallpaperID {
+            configuredWallpaperID = globallyPinnedWallpaperID
+        } else if profile.pinMode == .followLatest || profile.marketMode != .inherit {
+            configuredWallpaperID = downloadedDescriptors
+                .filter { $0.marketCode == effectiveMarketCode }
+                .max()?
+                .wallpaperIdentifier
+        } else {
+            configuredWallpaperID = currentWallpaperID
+        }
+
+        let displayedDescriptor = (configuredWallpaperID ?? currentWallpaperID).flatMap {
+            wallpaperID in
+            downloadedDescriptors.first { $0.wallpaperIdentifier == wallpaperID }
+        }
+        let visibleMarketCode = displayedDescriptor?.marketCode ?? effectiveMarketCode
+        descriptors = downloadedDescriptors.filter {
+            $0.marketCode == visibleMarketCode
+        }
+        selectedDescriptorIndex = displayedDescriptor.flatMap { displayed in
+            descriptors.firstIndex {
+                $0.wallpaperIdentifier == displayed.wallpaperIdentifier
+            }
+        } ?? max(0, descriptors.count - 1)
+
+        if let displayItem = menu?.item(withTag: MenuController.ACTIVE_DISPLAY_TAG) {
+            let title = WallpaperManager.displayInfo(
+                for: activeDisplayIdentifier
+            )?.title ?? "Current Display"
+            displayItem.title = "Display: \(title)"
+            displayItem.toolTip = "Wallpaper changes from this menu apply only to this display."
+        }
     }
 }
 
@@ -539,9 +652,14 @@ extension MenuController: UpdateManagerDelegate {
 
 extension MenuController: NSMenuDelegate {
     func menuNeedsUpdate(_ menu: NSMenu) {
+        showWallpaperForMenuDisplay()
         updateImageSelectorView(newSelectedDescriptorIndex: selectedDescriptorIndex)
         updateStatusMenu()
         updateFavoriteMenus()
+    }
+
+    func menuDidClose(_ menu: NSMenu) {
+        activeDisplayIdentifier = nil
     }
 }
 

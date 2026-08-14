@@ -66,6 +66,47 @@ final class WallpaperManager {
         updateWallpaperIfNeeded(forceRefresh: false)
     }
 
+    func setWallpaper(
+        descriptor: ImageDescriptor,
+        forDisplayIdentifier displayIdentifier: String
+    ) {
+        var profiles = settings.wallpaperDisplayProfiles
+        var profile = profiles[displayIdentifier] ?? WallpaperDisplayProfile()
+        if let marketCode = descriptor.marketCode {
+            profile.marketMode = .explicit
+            profile.marketCode = marketCode
+        } else {
+            profile.marketMode = .automatic
+            profile.marketCode = nil
+        }
+        profile.pinMode = .pinned
+        profile.pinnedWallpaperID = descriptor.wallpaperIdentifier
+        profiles[displayIdentifier] = profile
+        settings.wallpaperDisplayProfiles = profiles
+        applyWallpaper(descriptor, toDisplayIdentifier: displayIdentifier)
+    }
+
+    func followLatestWallpaper(forDisplayIdentifier displayIdentifier: String) {
+        var profiles = settings.wallpaperDisplayProfiles
+        var profile = profiles[displayIdentifier] ?? WallpaperDisplayProfile()
+        profile.pinMode = .followLatest
+        profile.pinnedWallpaperID = nil
+        profiles[displayIdentifier] = profile
+        settings.wallpaperDisplayProfiles = profiles
+
+        let effectiveMarketCode = profile.effectiveMarketCode(
+            globalMarketCode: settings.bingMarketCode
+        )
+        guard let descriptor = Database.instance.allImageDescriptors()
+            .filter({
+                $0.marketCode == effectiveMarketCode && $0.image.isOnDisk()
+            })
+            .max() else {
+            return
+        }
+        applyWallpaper(descriptor, toDisplayIdentifier: displayIdentifier)
+    }
+
     @MainActor
     func refreshWallpaper(force: Bool = false) {
         updateWallpaperIfNeeded(forceRefresh: force)
@@ -89,6 +130,16 @@ final class WallpaperManager {
             }
             return lhs.title.localizedStandardCompare(rhs.title) == .orderedAscending
         }
+    }
+
+    static func displayIdentifier(at point: NSPoint) -> String? {
+        let screen = NSScreen.screens.first(where: { $0.frame.contains(point) })
+            ?? NSScreen.main
+        return screen.flatMap { displayIdentifier(for: $0) }
+    }
+
+    static func displayInfo(for identifier: String) -> WallpaperDisplayInfo? {
+        connectedDisplays().first { $0.identifier == identifier }
     }
 
     nonisolated static func shouldApplyWallpaper(
@@ -236,6 +287,36 @@ final class WallpaperManager {
         return downloadedDescriptors
             .filter { $0.marketCode == effectiveMarketCode }
             .max()
+    }
+
+    private func applyWallpaper(
+        _ descriptor: ImageDescriptor,
+        toDisplayIdentifier displayIdentifier: String
+    ) {
+        guard let screen = NSScreen.screens.first(where: {
+            Self.displayIdentifier(for: $0) == displayIdentifier
+        }) else {
+            return
+        }
+
+        let imageURL = descriptor.image.downloadPath
+        FileHandler.withWallpaperDirectoryAccess { _ in
+            guard Self.wallpaperURL(
+                NSWorkspace.shared.desktopImageURL(for: screen),
+                matches: imageURL
+            ) == false else {
+                return
+            }
+            do {
+                try NSWorkspace.shared.setDesktopImageURL(
+                    imageURL,
+                    for: screen,
+                    options: [:]
+                )
+            } catch {
+                logger.error("Failed to set desktop image: \(error.localizedDescription, privacy: .public)")
+            }
+        }
     }
 
     private static func displayID(for screen: NSScreen) -> CGDirectDisplayID? {
