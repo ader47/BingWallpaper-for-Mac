@@ -13,6 +13,7 @@ class MenuController: NSObject {
     private let settings = Settings()
     private var descriptors = [ImageDescriptor]()
     private var selectedDescriptorIndex = 0
+    private var imageLoadGeneration = 0
     private var imageSelectorView: ImageSelectorView!
     var updateManager: UpdateManager?
     private static let IMAGE_VIEW_TAG = 6
@@ -28,7 +29,10 @@ class MenuController: NSObject {
     @MainActor
     func setup() {
         guard self.statusItem == nil && self.menu == nil else { return }
-        if settings.hideMenuBarIcon == true { return }
+        if settings.hideMenuBarIcon == true {
+            showNewestImage()
+            return
+        }
         
         self.statusItem = createStatusBarItem()
         self.menu = createMenu()
@@ -270,12 +274,23 @@ class MenuController: NSObject {
         guard let menu = menu else { return }
         
         let descriptor = descriptors[safe: newSelectedDescriptorIndex]
+        imageLoadGeneration += 1
+        let loadGeneration = imageLoadGeneration
+        if descriptor == nil {
+            imageSelectorView.imageView.image = nil
+        }
         Task {
             guard let descriptor else { return }
             do {
                 let imageData = try await descriptor.image.loadFromDisk()
                 await MainActor.run { [weak self] in
-                    self?.imageSelectorView.imageView.image = NSImage(data: imageData)
+                    guard let self,
+                          self.imageLoadGeneration == loadGeneration,
+                          self.descriptors[safe: self.selectedDescriptorIndex]?.wallpaperIdentifier
+                            == descriptor.wallpaperIdentifier else {
+                        return
+                    }
+                    self.imageSelectorView.imageView.image = NSImage(data: imageData)
                 }
             } catch {
                 logger.error("Failed to load image from disk: \(String(describing: descriptor), privacy: .public)")

@@ -73,6 +73,7 @@ final class UpdateManager: @unchecked Sendable {
     private var pendingCompletion: NSBackgroundActivityScheduler.CompletionHandler?
     private var consecutiveFailures = 0
     private var isUpdating = false
+    private var pendingUpdateRequested = false
     private(set) var status: WallpaperUpdateStatus
 
     private static let RETRY_BASE_INTERVAL: TimeInterval = 30
@@ -194,7 +195,8 @@ final class UpdateManager: @unchecked Sendable {
     @MainActor
     @objc func update() {
         guard isUpdating == false else {
-            logger.info("An update is already running; coalescing the request")
+            pendingUpdateRequested = true
+            logger.info("An update is already running; queueing one follow-up update")
             return
         }
 
@@ -280,6 +282,10 @@ final class UpdateManager: @unchecked Sendable {
                 self.pendingCompletion = nil
                 completion?(.finished)
 
+                if self.beginPendingUpdateIfNeeded() {
+                    return
+                }
+
                 let nextUpdateAt = self.scheduleNextActivity()
                 self.publishStatus(WallpaperUpdateStatus(
                     phase: .succeeded,
@@ -299,7 +305,18 @@ final class UpdateManager: @unchecked Sendable {
         let completion = pendingCompletion
         pendingCompletion = nil
         completion?(.deferred)
+        if beginPendingUpdateIfNeeded() {
+            return
+        }
         scheduleRetryAfterFailure(stage: stage, error: error)
+    }
+
+    @MainActor
+    private func beginPendingUpdateIfNeeded() -> Bool {
+        guard pendingUpdateRequested else { return false }
+        pendingUpdateRequested = false
+        update()
+        return true
     }
 
     @MainActor

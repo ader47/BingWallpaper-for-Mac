@@ -161,7 +161,7 @@ class SettingsVc: NSViewController {
             return profile
         }
         let dateFormatter = DateFormatter()
-        dateFormatter.dateFormat = "YYYYMMdd"
+        dateFormatter.dateFormat = "yyyyMMdd"
         let oldestDateStringToKeep = dateFormatter.string(from: Date())
         
         do {
