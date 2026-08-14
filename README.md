@@ -21,3 +21,7 @@ the GitHub release.
 The menu reports wallpaper update progress, the last successful update, the
 next scheduled attempt, and download errors. Failed updates use exponential
 backoff and can be retried immediately from the menu.
+
+Click the wallpaper description in the menu to see its date, Bing region and
+full copyright information. The same menu can open the original Bing page,
+reveal the downloaded file in Finder, or save a copy elsewhere.

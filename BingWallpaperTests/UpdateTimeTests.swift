@@ -245,3 +245,51 @@ final class UpdateStatusTests: XCTestCase {
         )
     }
 }
+
+final class WallpaperImageInfoTests: XCTestCase {
+    private let locale = Locale(identifier: "en_US")
+    private let timeZone = TimeZone(secondsFromGMT: 0)!
+
+    func testParsesTitleCopyrightDateAndRegion() {
+        let info = WallpaperImageInfo(
+            description: "Mountain lake (© Example Photographer)",
+            startDate: "20250102",
+            marketCode: "en-US",
+            locale: locale,
+            timeZone: timeZone
+        )
+
+        XCTAssertEqual(info.title, "Mountain lake")
+        XCTAssertEqual(info.copyright, "© Example Photographer")
+        XCTAssertEqual(info.date, "Jan 2, 2025")
+        XCTAssertTrue(info.region.hasSuffix("(en-US)"))
+    }
+
+    func testKeepsParenthesesInsideTitle() {
+        let info = WallpaperImageInfo(
+            description: "Lake (North Shore) at dawn (© Example)",
+            startDate: "20250102",
+            marketCode: nil,
+            locale: locale,
+            timeZone: timeZone
+        )
+
+        XCTAssertEqual(info.title, "Lake (North Shore) at dawn")
+        XCTAssertEqual(info.copyright, "© Example")
+        XCTAssertEqual(info.region, "Automatic (Network Location)")
+    }
+
+    func testDescriptionWithoutTrailingCopyrightRemainsTitle() {
+        let info = WallpaperImageInfo(
+            description: "Lake on the North Shore",
+            startDate: "not-a-date",
+            marketCode: nil,
+            locale: locale,
+            timeZone: timeZone
+        )
+
+        XCTAssertEqual(info.title, "Lake on the North Shore")
+        XCTAssertEqual(info.copyright, "")
+        XCTAssertEqual(info.date, "not-a-date")
+    }
+}

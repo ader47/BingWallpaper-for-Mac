@@ -1,5 +1,6 @@
 import Cocoa
 import OSLog
+import UniformTypeIdentifiers
 
 private let logger = Logger(
     subsystem: Logging.subsystem,
@@ -132,9 +133,51 @@ class MenuController: NSObject {
     }
     
     @MainActor
-    @objc func textItemAction(sender: NSMenuItem) {
-        if let descriptor = descriptors[safe: selectedDescriptorIndex] {
-            NSWorkspace.shared.open(descriptor.copyrightUrl)
+    @objc func imageInfoAction(_ sender: NSButton) {
+        guard let descriptor = descriptors[safe: selectedDescriptorIndex] else { return }
+        imageActionsMenu(for: descriptor).popUp(
+            positioning: nil,
+            at: NSPoint(x: sender.bounds.minX, y: sender.bounds.minY),
+            in: sender
+        )
+    }
+
+    @objc func openImageSource(_ sender: NSMenuItem) {
+        guard let descriptor = descriptors[safe: selectedDescriptorIndex] else { return }
+        NSWorkspace.shared.open(descriptor.copyrightUrl)
+    }
+
+    @objc func revealImageInFinder(_ sender: NSMenuItem) {
+        guard let descriptor = descriptors[safe: selectedDescriptorIndex] else { return }
+        NSWorkspace.shared.activateFileViewerSelecting([descriptor.image.downloadPath])
+    }
+
+    @MainActor
+    @objc func saveImageCopy(_ sender: NSMenuItem) {
+        guard let descriptor = descriptors[safe: selectedDescriptorIndex] else { return }
+
+        let savePanel = NSSavePanel()
+        savePanel.title = "Save Wallpaper Copy"
+        savePanel.nameFieldStringValue = descriptor.image.fileName
+        savePanel.allowedContentTypes = [.jpeg]
+        savePanel.canCreateDirectories = true
+        guard savePanel.runModal() == .OK, let destination = savePanel.url else { return }
+
+        do {
+            let data = try FileHandler.loadImageDataFromDisk(at: descriptor.image.downloadPath)
+            let didStartAccess = destination.startAccessingSecurityScopedResource()
+            defer {
+                if didStartAccess {
+                    destination.stopAccessingSecurityScopedResource()
+                }
+            }
+            try data.write(to: destination, options: .atomic)
+        } catch {
+            let alert = NSAlert()
+            alert.alertStyle = .warning
+            alert.messageText = "Couldn’t Save Wallpaper"
+            alert.informativeText = error.localizedDescription
+            alert.runModal()
         }
     }
     
@@ -175,10 +218,12 @@ class MenuController: NSObject {
         let textItem = NSMenuItem(title: "", action: nil, keyEquivalent: "")
         textItem.tag = MenuController.TEXT_VIEW_TAG
         let textView = TextView(frame: CGRect(x: 0, y: 0, width: menu.size.width, height: 0))
-        textView.descriptionLabel.stringValue = getDescription(description: descriptor?.descriptionString)
-        textView.copyrightLabel.stringValue = getCopyright(description: descriptor?.descriptionString)
-        textView.button.action = #selector(textItemAction)
+        let imageInfo = descriptor?.imageInfo
+        textView.descriptionLabel.stringValue = imageInfo?.title ?? ""
+        textView.copyrightLabel.stringValue = imageInfo?.copyright ?? ""
+        textView.button.action = #selector(imageInfoAction(_:))
         textView.button.target = self
+        textView.button.toolTip = "Show image details and actions"
         textItem.view = textView
         
         if let oldTextItem = menu.item(withTag: MenuController.TEXT_VIEW_TAG) {
@@ -192,14 +237,39 @@ class MenuController: NSObject {
         imageSelectorView.rightButton.isEnabled = descriptors.indices.contains(newSelectedDescriptorIndex + 1)
     }
     
-    private func getDescription(description: String?) -> String {
-        if description == nil { return "" }
-        return String(description?.split(separator: "(").first ?? "")
+    private func imageActionsMenu(for descriptor: ImageDescriptor) -> NSMenu {
+        let menu = NSMenu(title: "Wallpaper Details")
+        let info = descriptor.imageInfo
+        addImageDetail(title: "Title: \(info.title)", fullText: info.title, to: menu)
+        addImageDetail(title: "Date: \(info.date)", fullText: info.date, to: menu)
+        addImageDetail(title: "Region: \(info.region)", fullText: info.region, to: menu)
+        if info.copyright.isEmpty == false {
+            addImageDetail(
+                title: "Copyright: \(info.copyright)",
+                fullText: info.copyright,
+                to: menu
+            )
+        }
+
+        menu.addItem(.separator())
+        addImageAction(title: "Open Source on Bing", selector: #selector(openImageSource(_:)), to: menu)
+        addImageAction(title: "Show in Finder", selector: #selector(revealImageInFinder(_:)), to: menu)
+        addImageAction(title: "Save a Copy…", selector: #selector(saveImageCopy(_:)), to: menu)
+        return menu
     }
-    
-    private func getCopyright(description: String?) -> String {
-        if description == nil { return "" }
-        return description?.split(separator: "(").last?.replacingOccurrences(of: ")", with: "") ?? ""
+
+    private func addImageDetail(title: String, fullText: String, to menu: NSMenu) {
+        let displayTitle = title.count > 100 ? String(title.prefix(97)) + "…" : title
+        let item = NSMenuItem(title: displayTitle, action: nil, keyEquivalent: "")
+        item.toolTip = fullText
+        item.isEnabled = false
+        menu.addItem(item)
+    }
+
+    private func addImageAction(title: String, selector: Selector, to menu: NSMenu) {
+        let item = NSMenuItem(title: title, action: selector, keyEquivalent: "")
+        item.target = self
+        menu.addItem(item)
     }
 
     @MainActor
