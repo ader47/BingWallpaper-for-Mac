@@ -17,6 +17,8 @@ private let logger = Logger(
 
 class AppUpdateManager {
 
+    private static let defaultReleaseRepository = "ader47/BingWallpaper-for-Mac"
+
     private struct GitHubRelease: Decodable {
         let tagName: String
         let assets: [GitHubAsset]
@@ -37,17 +39,51 @@ class AppUpdateManager {
         }
     }
 
-    private static let githubLatestReleaseApiUrl = URL(string: "https://api.github.com/repos/2h4u/BingWallpaper-for-Mac/releases/latest")!
-    
     static func currentAppVersion() -> String {
         return Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "0.0.0"
     }
 
+    static func releaseRepository(bundle: Bundle = .main) -> String {
+        guard let repository = bundle.object(forInfoDictionaryKey: "BingWallpaperReleaseRepository") as? String,
+              isValidReleaseRepository(repository) else {
+            return defaultReleaseRepository
+        }
+        return repository
+    }
+
+    static func latestReleaseAPIURL(repository: String) -> URL? {
+        guard isValidReleaseRepository(repository) else {
+            return nil
+        }
+        var components = URLComponents()
+        components.scheme = "https"
+        components.host = "api.github.com"
+        components.path = "/repos/\(repository)/releases/latest"
+        return components.url
+    }
+
+    private static func isValidReleaseRepository(_ repository: String) -> Bool {
+        let components = repository.split(separator: "/", omittingEmptySubsequences: false)
+        guard components.count == 2 else { return false }
+        return components.allSatisfy { component in
+            component.isEmpty == false &&
+                component.allSatisfy { character in
+                    character.isASCII &&
+                        (character.isLetter || character.isNumber || "_.-".contains(character))
+                } &&
+                component.contains(where: { $0 != "." })
+        }
+    }
+
     private static func fetchLatestReleaseFromGithub() async -> GitHubRelease? {
+        guard let latestReleaseURL = latestReleaseAPIURL(repository: releaseRepository()) else {
+            logger.error("The configured GitHub release repository is invalid")
+            return nil
+        }
         do {
             return try await DownloadManager.downloadJson(
                 GitHubRelease.self,
-                from: githubLatestReleaseApiUrl,
+                from: latestReleaseURL,
                 headers: [
                     "Accept": "application/vnd.github+json",
                     "User-Agent": "BingWallpaper/\(currentAppVersion())",

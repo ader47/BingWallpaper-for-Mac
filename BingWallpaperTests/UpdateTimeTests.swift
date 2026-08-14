@@ -83,6 +83,14 @@ final class DownloadValidationTests: XCTestCase {
         XCTAssertTrue(AppUpdateManager.verifyChecksum(packageData: packageData, checksumText: checksum))
         XCTAssertFalse(AppUpdateManager.verifyChecksum(packageData: packageData, checksumText: String(repeating: "0", count: 64)))
     }
+
+    func testReleaseAPIUsesConfiguredRepository() {
+        XCTAssertEqual(
+            AppUpdateManager.latestReleaseAPIURL(repository: "ader47/BingWallpaper-for-Mac")?.absoluteString,
+            "https://api.github.com/repos/ader47/BingWallpaper-for-Mac/releases/latest"
+        )
+        XCTAssertNil(AppUpdateManager.latestReleaseAPIURL(repository: "../unexpected"))
+    }
 }
 
 final class BingMetadataValidationTests: XCTestCase {
