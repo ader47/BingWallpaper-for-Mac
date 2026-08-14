@@ -260,6 +260,26 @@ final class DatabaseTests: XCTestCase {
         XCTAssertEqual(database.allImageDescriptors().first?.marketCode, "zh-CN")
     }
 
+    func testAutomaticRegionVariantsOnTheSameDateRemainDistinct() throws {
+        let database = Database(inMemory: true)
+        let firstEntry = makeEntry(
+            startDate: "20250102",
+            imageURL: "/th?id=OHR.RegionOne_1920x1080.jpg"
+        )
+        let secondEntry = makeEntry(
+            startDate: "20250102",
+            imageURL: "/th?id=OHR.RegionTwo_1920x1080.jpg"
+        )
+
+        _ = try database.updateImageDescriptors(from: [firstEntry], marketCode: nil)
+        _ = try database.updateImageDescriptors(from: [secondEntry], marketCode: nil)
+
+        let descriptors = database.allImageDescriptors(marketCode: nil)
+        XCTAssertEqual(descriptors.count, 2)
+        XCTAssertEqual(Set(descriptors.map(\.wallpaperIdentifier)).count, 2)
+        XCTAssertEqual(Set(descriptors.map { $0.image.fileName }).count, 2)
+    }
+
     func testChangedImageRemainsPendingUntilDownloadIsRecorded() throws {
         let database = Database(inMemory: true)
         let originalEntry = makeEntry(
@@ -582,14 +602,58 @@ final class FavoriteWallpaperSettingsTests: XCTestCase {
     }
 
     func testWallpaperIdentifierIncludesMarket() {
+        let automaticImageURL = URL(
+            string: "https://www.bing.com/th?id=OHR.AutomaticExample_UHD.jpg"
+        )!
         XCTAssertEqual(
             ImageDescriptor.wallpaperIdentifier(startDate: "20250102", marketCode: "zh-CN"),
             "zh-CN:20250102"
         )
         XCTAssertEqual(
-            ImageDescriptor.wallpaperIdentifier(startDate: "20250102", marketCode: nil),
-            "automatic:20250102"
+            ImageDescriptor.wallpaperIdentifier(
+                startDate: "20250102",
+                marketCode: nil,
+                imageURL: automaticImageURL
+            ),
+            "automatic:20250102:OHR.AutomaticExample_UHD.jpg"
         )
+    }
+
+    @MainActor
+    func testMigratesLegacyAutomaticFavoritesAndPins() throws {
+        let database = Database(inMemory: true)
+        let entry = DownloadManager.ImageEntry(
+            url: "/th?id=OHR.AutomaticExample_1920x1080.jpg",
+            enddate: "20250103",
+            startdate: "20250102",
+            copyright: "Example (© Photographer)",
+            copyrightlink: "https://www.bing.com/search?q=example"
+        )
+        let descriptor = try XCTUnwrap(database.updateImageDescriptors(
+            from: [entry],
+            marketCode: nil
+        ).descriptors.first)
+
+        withSettings { settings in
+            let legacyID = "automatic:20250102"
+            settings.favoriteWallpaperIDs = [legacyID]
+            settings.pinnedWallpaperID = legacyID
+            settings.wallpaperDisplayProfiles = [
+                "display": WallpaperDisplayProfile(
+                    pinMode: .pinned,
+                    pinnedWallpaperID: legacyID
+                )
+            ]
+
+            settings.migrateLegacyAutomaticWallpaperIdentifiers(using: [descriptor])
+
+            XCTAssertEqual(settings.favoriteWallpaperIDs, [descriptor.wallpaperIdentifier])
+            XCTAssertEqual(settings.pinnedWallpaperID, descriptor.wallpaperIdentifier)
+            XCTAssertEqual(
+                settings.wallpaperDisplayProfiles["display"]?.pinnedWallpaperID,
+                descriptor.wallpaperIdentifier
+            )
+        }
     }
 
     private func withSettings(_ operation: (Settings) -> Void) {

@@ -63,6 +63,7 @@ final class Database {
         fetchRequest.predicate = predicate
         fetchRequest.sortDescriptors = [
             NSSortDescriptor(key: "startDate", ascending: true),
+            NSSortDescriptor(key: "lastSeenAt", ascending: true),
             NSSortDescriptor(key: "marketCode", ascending: true)
         ]
         
@@ -135,25 +136,37 @@ final class Database {
         marketCode: String?
     ) throws -> ImageDescriptorUpdate {
         let managedContext = persistentContainer.viewContext
-        let requestedStartDates = Set(imageEntries.map { $0.startdate })
-        var descriptorByStartDate = try fetchImageDescriptors(
+        var descriptorByIdentity = try fetchImageDescriptors(
             predicate: marketPredicate(marketCode)
         )
             .reduce(into: [String: ImageDescriptor]()) { descriptors, descriptor in
-                descriptors[descriptor.startDate] = descriptor
+                let identity = ImageDescriptor.archiveIdentity(
+                    startDate: descriptor.startDate,
+                    marketCode: descriptor.marketCode,
+                    imageURL: descriptor.imageUrl
+                )
+                descriptors[identity] = descriptor
             }
         var wallpaperIDsRequiringDownload = Set<String>()
         var validMetadataCount = 0
+        var currentDescriptors = [ImageDescriptor]()
         
         for image in imageEntries {
             do {
-                if let existingDescriptor = descriptorByStartDate[image.startdate] {
+                let metadata = try ImageDescriptor.validatedMetadata(from: image)
+                let archiveIdentity = ImageDescriptor.archiveIdentity(
+                    startDate: metadata.startDate,
+                    marketCode: marketCode,
+                    imageURL: metadata.imageURL
+                )
+                if let existingDescriptor = descriptorByIdentity[archiveIdentity] {
                     if try existingDescriptor.update(from: image) {
                         wallpaperIDsRequiringDownload.insert(existingDescriptor.wallpaperIdentifier)
                     }
                     if existingDescriptor.requiresImageDownload {
                         wallpaperIDsRequiringDownload.insert(existingDescriptor.wallpaperIdentifier)
                     }
+                    currentDescriptors.append(existingDescriptor)
                     validMetadataCount += 1
                 } else {
                     let descriptor = try ImageDescriptor.instantiate(
@@ -161,7 +174,8 @@ final class Database {
                         marketCode: marketCode,
                         in: managedContext
                     )
-                    descriptorByStartDate[descriptor.startDate] = descriptor
+                    descriptorByIdentity[archiveIdentity] = descriptor
+                    currentDescriptors.append(descriptor)
                     validMetadataCount += 1
                 }
             } catch {
@@ -182,20 +196,6 @@ final class Database {
             throw error
         }
         
-        // Retry missing files while they are still part of Bing's current
-        // archive response. Historical descriptors must not keep an otherwise
-        // healthy update in a permanent retry loop when their remote URL expires.
-        let currentDescriptors: [ImageDescriptor]
-        if requestedStartDates.isEmpty {
-            currentDescriptors = []
-        } else {
-            currentDescriptors = try fetchImageDescriptors(
-                predicate: NSCompoundPredicate(andPredicateWithSubpredicates: [
-                    marketPredicate(marketCode),
-                    NSPredicate(format: "startDate IN %@", Array(requestedStartDates))
-                ])
-            )
-        }
         return ImageDescriptorUpdate(
             descriptors: currentDescriptors,
             wallpaperIDsRequiringDownload: wallpaperIDsRequiringDownload
@@ -258,6 +258,11 @@ final class Database {
         requiresImageDownloadAttr.attributeType = .booleanAttributeType
         requiresImageDownloadAttr.isOptional = false
         requiresImageDownloadAttr.defaultValue = false
+
+        let lastSeenAtAttr = NSAttributeDescription()
+        lastSeenAtAttr.name = "lastSeenAt"
+        lastSeenAtAttr.attributeType = .dateAttributeType
+        lastSeenAtAttr.isOptional = true
         
         entity.properties = [
             startDateAttr,
@@ -266,7 +271,8 @@ final class Database {
             descriptionStringAttr,
             copyrightUrlAttr,
             marketCodeAttr,
-            requiresImageDownloadAttr
+            requiresImageDownloadAttr,
+            lastSeenAtAttr
         ]
         
         return entity

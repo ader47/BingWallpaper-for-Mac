@@ -1,5 +1,6 @@
 import AppKit
 import CoreData
+import CryptoKit
 import Foundation
 
 struct WallpaperImageInfo: Equatable {
@@ -109,6 +110,7 @@ public final class ImageDescriptor: NSManagedObject {
     @NSManaged var copyrightUrl: URL
     @NSManaged var marketCode: String?
     @NSManaged var requiresImageDownload: Bool
+    @NSManaged var lastSeenAt: Date?
     lazy var image: Image = {
         return Image(descriptor: self)
     }()
@@ -122,11 +124,51 @@ public final class ImageDescriptor: NSManagedObject {
     }
 
     var wallpaperIdentifier: String {
-        return Self.wallpaperIdentifier(startDate: startDate, marketCode: marketCode)
+        return Self.wallpaperIdentifier(
+            startDate: startDate,
+            marketCode: marketCode,
+            imageURL: imageUrl
+        )
     }
 
-    static func wallpaperIdentifier(startDate: String, marketCode: String?) -> String {
-        return "\(marketCode ?? "automatic"):\(startDate)"
+    static func wallpaperIdentifier(
+        startDate: String,
+        marketCode: String?,
+        imageURL: URL? = nil
+    ) -> String {
+        guard marketCode == nil, let imageURL else {
+            return "\(marketCode ?? "automatic"):\(startDate)"
+        }
+        return "automatic:\(startDate):\(imageIdentity(for: imageURL))"
+    }
+
+    static func legacyAutomaticWallpaperIdentifier(startDate: String) -> String {
+        return "automatic:\(startDate)"
+    }
+
+    static func imageIdentity(for imageURL: URL) -> String {
+        let components = URLComponents(url: imageURL, resolvingAgainstBaseURL: false)
+        let bingImageID = components?.queryItems?.first(where: {
+            $0.name.caseInsensitiveCompare("id") == .orderedSame
+        })?.value
+        if let identity = safeIdentityComponent(bingImageID), identity.isEmpty == false {
+            return identity
+        }
+
+        let digest = SHA256.hash(data: Data(imageURL.absoluteString.utf8))
+        return digest.map { String(format: "%02x", $0) }.joined()
+    }
+
+    private static func safeIdentityComponent(_ value: String?) -> String? {
+        guard let value else { return nil }
+        let allowed = CharacterSet.alphanumerics.union(CharacterSet(charactersIn: "-_."))
+        let scalars = value.unicodeScalars.filter { allowed.contains($0) }
+        return String(String.UnicodeScalarView(scalars).prefix(120))
+    }
+
+    static func archiveIdentity(startDate: String, marketCode: String?, imageURL: URL) -> String {
+        guard marketCode == nil else { return startDate }
+        return "\(startDate):\(imageIdentity(for: imageURL))"
     }
     
     static func == (lhs: ImageDescriptor, rhs: ImageDescriptor) -> Bool {
@@ -153,6 +195,7 @@ public final class ImageDescriptor: NSManagedObject {
         imageDescriptor.copyrightUrl = metadata.copyrightURL
         imageDescriptor.marketCode = marketCode
         imageDescriptor.requiresImageDownload = true
+        imageDescriptor.lastSeenAt = Date()
         return imageDescriptor
     }
 
@@ -171,6 +214,7 @@ public final class ImageDescriptor: NSManagedObject {
         if imageChanged {
             requiresImageDownload = true
         }
+        lastSeenAt = Date()
         return imageChanged
     }
 
@@ -240,6 +284,12 @@ extension ImageDescriptor: Comparable {
     public static func < (lhs: ImageDescriptor, rhs: ImageDescriptor) -> Bool {
         if lhs.startDate != rhs.startDate {
             return lhs.startDate < rhs.startDate
+        }
+        if lhs.lastSeenAt != rhs.lastSeenAt {
+            return (lhs.lastSeenAt ?? .distantPast) < (rhs.lastSeenAt ?? .distantPast)
+        }
+        if lhs.marketCode == nil, rhs.marketCode == nil {
+            return Self.imageIdentity(for: lhs.imageUrl) < Self.imageIdentity(for: rhs.imageUrl)
         }
         return (lhs.marketCode ?? "") < (rhs.marketCode ?? "")
     }

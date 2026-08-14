@@ -94,6 +94,28 @@ class FileHandler {
             logger.error("Failed to create bing-wallpapers folder with error: \(error.localizedDescription, privacy: .public)")
         }
     }
+
+    static func migrateLegacyAutomaticWallpaperFiles(_ descriptors: [ImageDescriptor]) {
+        do {
+            try withWallpaperDirectoryAccess { directory in
+                for descriptor in descriptors where descriptor.marketCode == nil {
+                    let legacyURL = directory.appendingPathComponent(
+                        Image.legacyAutomaticFileName(startDate: descriptor.startDate)
+                    )
+                    let destinationURL = directory.appendingPathComponent(descriptor.image.fileName)
+                    guard FileManager.default.fileExists(atPath: legacyURL.path),
+                          FileManager.default.fileExists(atPath: destinationURL.path) == false else {
+                        continue
+                    }
+                    validationCache.invalidate(legacyURL)
+                    validationCache.invalidate(destinationURL)
+                    try FileManager.default.moveItem(at: legacyURL, to: destinationURL)
+                }
+            }
+        } catch {
+            logger.error("Failed to migrate legacy automatic wallpaper files: \(error.localizedDescription, privacy: .public)")
+        }
+    }
     
     static func saveImageDataToDisk(imageData: Data, toUrl: URL) throws {
         try saveImageDataToDisk(

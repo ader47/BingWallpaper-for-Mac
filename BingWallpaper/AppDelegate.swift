@@ -8,6 +8,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ aNotification: Notification) {
         FileHandler.createWallpaperFolderIfNeeded()
         _ = Database.instance.persistentContainer
+        let existingDescriptors = Database.instance.allImageDescriptors()
+        FileHandler.migrateLegacyAutomaticWallpaperFiles(existingDescriptors)
+        Settings().migrateLegacyAutomaticWallpaperIdentifiers(using: existingDescriptors)
         
         let updateManager = UpdateManager()
         updateManager.delegate = menuController

@@ -303,6 +303,29 @@ public class Settings {
         }
         return result
     }
+
+    func migrateLegacyAutomaticWallpaperIdentifiers(using descriptors: [ImageDescriptor]) {
+        let replacements = descriptors.reduce(into: [String: String]()) { result, descriptor in
+            guard descriptor.marketCode == nil else { return }
+            result[ImageDescriptor.legacyAutomaticWallpaperIdentifier(
+                startDate: descriptor.startDate
+            )] = descriptor.wallpaperIdentifier
+        }
+        guard replacements.isEmpty == false else { return }
+
+        favoriteWallpaperIDs = Set(favoriteWallpaperIDs.map { replacements[$0] ?? $0 })
+        if let pinnedWallpaperID, let replacement = replacements[pinnedWallpaperID] {
+            self.pinnedWallpaperID = replacement
+        }
+        wallpaperDisplayProfiles = wallpaperDisplayProfiles.mapValues { profile in
+            var profile = profile
+            if let pinnedWallpaperID = profile.pinnedWallpaperID,
+               let replacement = replacements[pinnedWallpaperID] {
+                profile.pinnedWallpaperID = replacement
+            }
+            return profile
+        }
+    }
     
     public var lastUpdate: Date {
         get {

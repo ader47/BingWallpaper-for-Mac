@@ -23,24 +23,42 @@ class Image {
         self.descriptor = descriptor
         self.fileName = Self.fileName(
             startDate: descriptor.startDate,
-            marketCode: descriptor.marketCode
+            marketCode: descriptor.marketCode,
+            imageIdentity: descriptor.marketCode == nil
+                ? ImageDescriptor.imageIdentity(for: descriptor.imageUrl)
+                : nil
         )
     }
 
-    static func fileName(startDate: String, marketCode: String?) -> String {
+    static func fileName(
+        startDate: String,
+        marketCode: String?,
+        imageIdentity: String? = nil
+    ) -> String {
         let safeDate = safeFileNameComponent(startDate, expectedDate: true)
         guard let marketCode else {
-            // Keep the legacy name for automatic/network-location images.
-            return safeDate + ".jpg"
+            guard let imageIdentity else { return legacyAutomaticFileName(startDate: startDate) }
+            let safeIdentity = safeFileNameComponent(imageIdentity, expectedDate: false)
+            return "automatic_\(safeDate)_\(safeIdentity).jpg"
         }
         let safeMarket = safeFileNameComponent(marketCode, expectedDate: false)
         return safeMarket + "_" + safeDate + ".jpg"
     }
 
+    static func legacyAutomaticFileName(startDate: String) -> String {
+        return safeFileNameComponent(startDate, expectedDate: true) + ".jpg"
+    }
+
     private static func safeFileNameComponent(_ value: String, expectedDate: Bool) -> String {
-        let isExpectedValue = expectedDate
-            ? ImageDescriptor.isValidBingDate(value)
-            : BingMarketOption.supportedCodes.contains(value)
+        let isExpectedValue: Bool
+        if expectedDate {
+            isExpectedValue = ImageDescriptor.isValidBingDate(value)
+        } else {
+            let allowed = CharacterSet.alphanumerics.union(CharacterSet(charactersIn: "-_."))
+            isExpectedValue = value.isEmpty == false && value.unicodeScalars.allSatisfy {
+                allowed.contains($0)
+            }
+        }
         guard isExpectedValue else {
             let encodedValue = value.utf8
                 .prefix(64)
