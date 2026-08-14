@@ -212,8 +212,7 @@ final class UpdateManager: @unchecked Sendable {
         let marketCodes = settings.requiredBingMarketCodes
 
         Task { [weak self] in
-            var imageDownloadFailed = false
-            var firstImageDownloadError: Error?
+            var imageFailureRequiringRetry: Error?
             var downloadedAnImage = false
 
             for marketCode in marketCodes {
@@ -238,6 +237,10 @@ final class UpdateManager: @unchecked Sendable {
                     from: imageEntries,
                     marketCode: marketCode
                 )
+                var marketHasAvailableImage = Database.instance
+                    .allImageDescriptors(marketCode: marketCode)
+                    .contains { $0.image.isOnDisk() }
+                var marketErrors = [Error]()
                 let missingDescriptors = descriptors
                     .filter { $0.image.isOnDisk() == false }
 
@@ -245,12 +248,21 @@ final class UpdateManager: @unchecked Sendable {
                     do {
                         try await descriptor.image.downloadAndSaveToDisk()
                         downloadedAnImage = true
+                        marketHasAvailableImage = true
                     } catch {
-                        imageDownloadFailed = true
-                        if firstImageDownloadError == nil {
-                            firstImageDownloadError = error
-                        }
+                        marketErrors.append(error)
                         logger.error("Failed to download and store image \(descriptor.imageUrl, privacy: .public) with error: \(error.localizedDescription, privacy: .public)")
+                    }
+                }
+
+                // A partially successful archive is still usable. Retry only
+                // when a transient error leaves this market with no local image.
+                if Self.imageDownloadFailuresRequireRetry(
+                    hasAvailableImage: marketHasAvailableImage,
+                    errors: marketErrors
+                ), imageFailureRequiringRetry == nil {
+                    imageFailureRequiringRetry = marketErrors.first {
+                        DownloadManager.isPermanentlyUnavailableResourceError($0) == false
                     }
                 }
             }
@@ -260,10 +272,10 @@ final class UpdateManager: @unchecked Sendable {
                 if downloadedAnImage {
                     self.delegate?.downloadedNewImage()
                 }
-                if imageDownloadFailed {
+                if let imageFailureRequiringRetry {
                     self.finishUpdateWithFailure(
                         stage: .images,
-                        error: firstImageDownloadError ?? ImageError.dataNotValid
+                        error: imageFailureRequiringRetry
                     )
                     return
                 }
@@ -342,6 +354,15 @@ final class UpdateManager: @unchecked Sendable {
             RETRY_BASE_INTERVAL * pow(2.0, Double(exponent)),
             RETRY_MAX_INTERVAL
         )
+    }
+
+    static func imageDownloadFailuresRequireRetry(
+        hasAvailableImage: Bool,
+        errors: [Error]
+    ) -> Bool {
+        return hasAvailableImage == false && errors.contains {
+            DownloadManager.isPermanentlyUnavailableResourceError($0) == false
+        }
     }
 
     private var lastSuccessfulUpdate: Date? {

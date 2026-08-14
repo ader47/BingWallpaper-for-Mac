@@ -58,6 +58,11 @@ class DownloadManager {
         }
     }
 
+    static func isPermanentlyUnavailableResourceError(_ error: Swift.Error) -> Bool {
+        guard case Error.httpStatus(let statusCode) = error else { return false }
+        return statusCode == 404 || statusCode == 410
+    }
+
     private static func validateContentType(_ response: URLResponse, prefixes: [String]) throws {
         guard let mimeType = response.mimeType,
               prefixes.contains(where: { mimeType.hasPrefix($0) }) else {

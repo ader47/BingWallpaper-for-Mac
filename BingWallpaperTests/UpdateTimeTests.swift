@@ -67,6 +67,21 @@ final class DownloadValidationTests: XCTestCase {
         XCTAssertThrowsError(try DownloadManager.validateHttpResponse(response))
     }
 
+    func testClassifiesOnlyMissingHTTPResourcesAsPermanent() {
+        XCTAssertTrue(DownloadManager.isPermanentlyUnavailableResourceError(
+            DownloadManager.Error.httpStatus(404)
+        ))
+        XCTAssertTrue(DownloadManager.isPermanentlyUnavailableResourceError(
+            DownloadManager.Error.httpStatus(410)
+        ))
+        XCTAssertFalse(DownloadManager.isPermanentlyUnavailableResourceError(
+            DownloadManager.Error.httpStatus(500)
+        ))
+        XCTAssertFalse(DownloadManager.isPermanentlyUnavailableResourceError(
+            URLError(.timedOut)
+        ))
+    }
+
     func testRecognizesFlatInstallerPackageMagic() {
         XCTAssertTrue(DownloadManager.isValidInstallerPackage(Data([0x78, 0x61, 0x72, 0x21, 0x00])))
         XCTAssertFalse(DownloadManager.isValidInstallerPackage(Data("<html>not a package</html>".utf8)))
@@ -325,6 +340,23 @@ final class UpdateStatusTests: XCTestCase {
 
         XCTAssertEqual(manager.status.lastSuccessAt, expectedDate)
         XCTAssertEqual(manager.status.phase, .idle)
+    }
+
+    func testPartialImageAvailabilityDoesNotTriggerRetryLoop() {
+        let transientError = DownloadManager.Error.httpStatus(500)
+
+        XCTAssertFalse(UpdateManager.imageDownloadFailuresRequireRetry(
+            hasAvailableImage: true,
+            errors: [transientError]
+        ))
+        XCTAssertTrue(UpdateManager.imageDownloadFailuresRequireRetry(
+            hasAvailableImage: false,
+            errors: [transientError]
+        ))
+        XCTAssertFalse(UpdateManager.imageDownloadFailuresRequireRetry(
+            hasAvailableImage: false,
+            errors: [DownloadManager.Error.httpStatus(404)]
+        ))
     }
 
     private func status(

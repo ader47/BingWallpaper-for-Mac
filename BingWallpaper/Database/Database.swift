@@ -60,6 +60,7 @@ class Database {
     @MainActor
     func updateImageDescriptors(from imageEntries: [DownloadManager.ImageEntry], marketCode: String?) -> [ImageDescriptor] {
         let managedContext = persistentContainer.viewContext
+        let requestedStartDates = Set(imageEntries.map { $0.startdate })
         let preservedStartDates = allImageDescriptors(marketCode: marketCode)
             .map { $0.startDate }
         
@@ -83,9 +84,11 @@ class Database {
             logger.error("Could not save. \(error, privacy: .public), \(error.userInfo, privacy: .public)")
         }
         
-        // Return all descriptors for this market so missing files are retried,
-        // even when their metadata was saved by an earlier update.
+        // Retry missing files while they are still part of Bing's current
+        // archive response. Historical descriptors must not keep an otherwise
+        // healthy update in a permanent retry loop when their remote URL expires.
         return allImageDescriptors(marketCode: marketCode)
+            .filter { requestedStartDates.contains($0.startDate) }
     }
     
     
