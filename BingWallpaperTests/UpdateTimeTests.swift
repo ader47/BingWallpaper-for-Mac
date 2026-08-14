@@ -15,19 +15,17 @@ final class UpdateTimeTests: XCTestCase {
     override func tearDownWithError() throws { }
     
     func testUpdateAfter3h() {
-        let before3h = Date(timeIntervalSinceNow: -3 * 3600)
-        let settings = Settings()
-        settings.lastUpdate = before3h
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        let before3h = now.addingTimeInterval(-3 * 3600)
         
-        XCTAssertTrue(UpdateScheduleManager.isUpdateNecessary())
+        XCTAssertTrue(UpdateScheduleManager.isUpdateNecessary(lastUpdate: before3h, now: now))
     }
     
-    func testUpdateAfer2h() {
-        let before2h = Date(timeIntervalSinceNow: -2 * 3600)
-        let settings = Settings()
-        settings.lastUpdate = before2h
+    func testUpdateAfter2h() {
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        let before2h = now.addingTimeInterval(-2 * 3600)
         
-        XCTAssertFalse(UpdateScheduleManager.isUpdateNecessary())
+        XCTAssertFalse(UpdateScheduleManager.isUpdateNecessary(lastUpdate: before2h, now: now))
     }
 
 }
