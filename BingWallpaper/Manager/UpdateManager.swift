@@ -173,6 +173,15 @@ final class UpdateManager {
                 preservedIDs.insert(pinnedWallpaperID)
             }
         }
+        let downloadedDescriptors = Database.instance.allImageDescriptors()
+            .filter { $0.image.isOnDisk() }
+        for marketCode in settings.requiredBingMarketCodes {
+            if let newestDescriptor = downloadedDescriptors
+                .filter({ $0.marketCode == marketCode })
+                .max() {
+                preservedIDs.insert(newestDescriptor.wallpaperIdentifier)
+            }
+        }
         preservedIDs.formUnion(WallpaperManager.currentWallpaperIdentifiers())
         do {
             let deletedFileNames = try Database.instance.deleteImageDescriptors(
