@@ -8,6 +8,40 @@ private let logger = Logger(
     category: Logging.Category.Settings.rawValue
 )
 
+struct BingMarketOption: Equatable {
+    let code: String?
+    let title: String
+
+    static let automatic = BingMarketOption(
+        code: nil,
+        title: "Automatic (Network Location)"
+    )
+
+    // Bing's documented `mkt` values. A market is a language and a
+    // country/region, so a country can appear more than once.
+    static let supportedCodes = [
+        "es-AR", "en-AU", "de-AT", "nl-BE", "fr-BE", "pt-BR",
+        "en-CA", "fr-CA", "es-CL", "da-DK", "fi-FI", "fr-FR",
+        "de-DE", "zh-HK", "en-IN", "en-ID", "it-IT", "ja-JP",
+        "ko-KR", "en-MY", "es-MX", "nl-NL", "en-NZ", "no-NO",
+        "zh-CN", "pl-PL", "en-PH", "ru-RU", "en-ZA", "es-ES",
+        "sv-SE", "fr-CH", "de-CH", "zh-TW", "tr-TR", "en-GB",
+        "en-US", "es-US"
+    ]
+
+    static var all: [BingMarketOption] {
+        let localizedMarkets = supportedCodes
+            .map { code in
+                let localizedName = Locale.current.localizedString(forIdentifier: code) ?? code
+                return BingMarketOption(code: code, title: "\(localizedName) (\(code))")
+            }
+            .sorted { (lhs: BingMarketOption, rhs: BingMarketOption) in
+                lhs.title.localizedStandardCompare(rhs.title) == .orderedAscending
+            }
+        return [automatic] + localizedMarkets
+    }
+}
+
 public class Settings {
     private let defaults = UserDefaults.standard
 
@@ -81,6 +115,25 @@ public class Settings {
             defaults.set(newValue, forKey: Settings.IMAGE_DOWNLOAD_PATH)
         }
     }
+
+    /// The explicit Bing market selected by the user, or `nil` when Bing
+    /// should infer it from the network location.
+    var bingMarketCode: String? {
+        get {
+            guard let code = defaults.string(forKey: Settings.BING_MARKET_CODE),
+                  BingMarketOption.supportedCodes.contains(code) else {
+                return nil
+            }
+            return code
+        }
+        set {
+            if let newValue, BingMarketOption.supportedCodes.contains(newValue) {
+                defaults.set(newValue, forKey: Settings.BING_MARKET_CODE)
+            } else {
+                defaults.removeObject(forKey: Settings.BING_MARKET_CODE)
+            }
+        }
+    }
     
     public var lastUpdate: Date {
         get {
@@ -145,6 +198,7 @@ public class Settings {
     private static let SM_LOGIN_ENABLED_LEGACY = "SM_LOGIN_ENABLED"
     private static let HIDE_MENU_BAR_ICON = "HIDE_MENU_BAR_ICON"
     private static let IMAGE_DOWNLOAD_PATH = "IMAGE_DOWNLOAD_PATH"
+    private static let BING_MARKET_CODE = "BING_MARKET_CODE"
     private static let LAST_UPDATE = "LAST_UPDATE"
     private static let KEEP_IMAGE_DURATION = "KEEP_IMAGE_DURATION"
 }

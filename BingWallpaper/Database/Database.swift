@@ -32,6 +32,11 @@ class Database {
             return []
         }
     }
+
+    @MainActor
+    func allImageDescriptors(marketCode: String?) -> [ImageDescriptor] {
+        return allImageDescriptors().filter { $0.marketCode == marketCode }
+    }
     
     @MainActor
     func deleteImageDescriptors(olderThan oldestDateStringToKeep: String) throws {
@@ -45,15 +50,15 @@ class Database {
     }
     
     @MainActor
-    func updateImageDescriptors(from imageEntries: [DownloadManager.ImageEntry]) -> [ImageDescriptor] {
+    func updateImageDescriptors(from imageEntries: [DownloadManager.ImageEntry], marketCode: String?) -> [ImageDescriptor] {
         let managedContext = persistentContainer.viewContext
-        let preservedStartDates = allImageDescriptors()
+        let preservedStartDates = allImageDescriptors(marketCode: marketCode)
             .map { $0.startDate }
         
-        let imageDescriptors = imageEntries
+        imageEntries
             .filter { imageEntry in preservedStartDates.contains(imageEntry.startdate) == false }
-            .map { image -> ImageDescriptor in
-                ImageDescriptor.instantiate(from: image, in: managedContext)
+            .forEach { image in
+                _ = ImageDescriptor.instantiate(from: image, marketCode: marketCode, in: managedContext)
             }
         
         do {
@@ -62,7 +67,9 @@ class Database {
             logger.error("Could not save. \(error, privacy: .public), \(error.userInfo, privacy: .public)")
         }
         
-        return imageDescriptors
+        // Return all descriptors for this market so missing files are retried,
+        // even when their metadata was saved by an earlier update.
+        return allImageDescriptors(marketCode: marketCode)
     }
     
     
@@ -98,13 +105,19 @@ class Database {
         copyrightUrlAttr.name = "copyrightUrl"
         copyrightUrlAttr.attributeType = .URIAttributeType
         copyrightUrlAttr.isOptional = false
+
+        let marketCodeAttr = NSAttributeDescription()
+        marketCodeAttr.name = "marketCode"
+        marketCodeAttr.attributeType = .stringAttributeType
+        marketCodeAttr.isOptional = true
         
         entity.properties = [
             startDateAttr,
             endDateAttr,
             imageUrlAttr,
             descriptionStringAttr,
-            copyrightUrlAttr
+            copyrightUrlAttr,
+            marketCodeAttr
         ]
         
         return entity

@@ -95,12 +95,13 @@ final class UpdateManager: @unchecked Sendable {
     @MainActor
     @objc func update() {
         logger.info("Updating")
+        let marketCode = settings.bingMarketCode
 
         Task { [weak self] in
 
             let imageEntries: [DownloadManager.ImageEntry]
             do {
-                imageEntries = try await DownloadManager.downloadImageEntries(numberOfImages: 8)
+                imageEntries = try await DownloadManager.downloadImageEntries(numberOfImages: 8, marketCode: marketCode)
             } catch {
                 logger.error("Failed to download image entries with error: \(error.localizedDescription, privacy: .public)")
                 await MainActor.run { [weak self] in
@@ -113,7 +114,7 @@ final class UpdateManager: @unchecked Sendable {
                 return
             }
 
-           let descriptors = Database.instance.updateImageDescriptors(from: imageEntries)
+           let descriptors = Database.instance.updateImageDescriptors(from: imageEntries, marketCode: marketCode)
 
            let newDescriptors = descriptors
                 .filter { $0.image.isOnDisk() == false }

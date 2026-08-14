@@ -73,7 +73,13 @@ class FileHandler {
     
     static func deleteOldImages(oldestDateStringToKeep: String) {
         getSavedImages()
-            .filter { $0.lastPathComponent.replacingOccurrences(of: ".jpg", with: "") <= oldestDateStringToKeep }
+            .filter { imageUrl in
+                let fileName = imageUrl.deletingPathExtension().lastPathComponent
+                let dateString = String(fileName.suffix(8))
+                return dateString.count == 8 &&
+                    dateString.allSatisfy(\.isNumber) &&
+                    dateString <= oldestDateStringToKeep
+            }
             .forEach { removeImageFromDisk(imagePath: $0) }
     }
     

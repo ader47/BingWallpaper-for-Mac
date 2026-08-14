@@ -6,7 +6,7 @@
 //
 
 import XCTest
-import BingWallpaper
+@testable import BingWallpaper
 
 final class UpdateTimeTests: XCTestCase {
     
@@ -30,4 +30,27 @@ final class UpdateTimeTests: XCTestCase {
         XCTAssertFalse(UpdateScheduleManager.isUpdateNecessary())
     }
 
+}
+
+final class BingMarketTests: XCTestCase {
+    func testAutomaticMarketDoesNotAddMarketQuery() {
+        let url = DownloadManager.imageArchiveUrl(numberOfImages: 8, marketCode: nil)
+        let queryItems = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems
+
+        XCTAssertNil(queryItems?.first(where: { $0.name == "mkt" }))
+    }
+
+    func testExplicitMarketAddsMarketQuery() {
+        let url = DownloadManager.imageArchiveUrl(numberOfImages: 8, marketCode: "zh-CN")
+        let queryItems = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems
+
+        XCTAssertEqual(queryItems?.first(where: { $0.name == "mkt" })?.value, "zh-CN")
+    }
+
+    func testSupportedMarketCodesAreUniqueAndWellFormed() {
+        let codes = BingMarketOption.supportedCodes
+
+        XCTAssertEqual(Set(codes).count, codes.count)
+        XCTAssertTrue(codes.allSatisfy { $0.range(of: "^[a-z]{2}-[A-Z]{2}$", options: .regularExpression) != nil })
+    }
 }

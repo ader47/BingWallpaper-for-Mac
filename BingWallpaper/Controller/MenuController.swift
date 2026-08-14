@@ -196,9 +196,14 @@ class MenuController: NSObject {
     
     @MainActor
     private func showNewestImage() {
-        self.descriptors = Database.instance.allImageDescriptors()
+        self.descriptors = Database.instance.allImageDescriptors(marketCode: settings.bingMarketCode)
             .filter { $0.image.isOnDisk() }
-        selectedDescriptorIndex = self.descriptors.firstIndex(where: { $0 == self.descriptors.last }) ?? self.descriptors.endIndex
+        guard descriptors.isEmpty == false else {
+            selectedDescriptorIndex = 0
+            imageSelectorView?.imageView.image = nil
+            return
+        }
+        selectedDescriptorIndex = descriptors.count - 1
         updateSelectedImage(newSelectedDescriptorIndex: selectedDescriptorIndex)
     }
 }
@@ -218,6 +223,10 @@ extension MenuController: NSMenuDelegate {
 }
 
 extension MenuController: SettingsVcDelegate {
+    func bingMarketDidChange() {
+        showNewestImage()
+    }
+
     func showMenuBarIcon() {
         setup()
     }

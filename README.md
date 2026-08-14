@@ -6,3 +6,7 @@
 
 BingWallpaper is a menubar app for MacOS which automatically downloads the newest [bing wallpaper of the day](https://www.microsoft.com/bing/bing-wallpaper) 
 and sets it as wallpaper for all your monitors (and spaces!).
+
+By default, Bing selects the wallpaper market from your network location. You
+can also choose any supported Bing country/region and language market in the
+app settings.

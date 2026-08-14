@@ -33,9 +33,22 @@ class DownloadManager {
         return DownloadResponse(data: data, urlResponse: urlResponse)
     }
     
-    static func downloadImageEntries(numberOfImages: Int) async throws -> [ImageEntry] {
+    static func imageArchiveUrl(numberOfImages: Int, marketCode: String?) -> URL {
+        var components = URLComponents(string: "https://www.bing.com/HPImageArchive.aspx")!
+        components.queryItems = [
+            URLQueryItem(name: "format", value: "js"),
+            URLQueryItem(name: "n", value: String(numberOfImages)),
+            URLQueryItem(name: "idx", value: "0")
+        ]
+        if let marketCode {
+            components.queryItems?.append(URLQueryItem(name: "mkt", value: marketCode))
+        }
+        return components.url!
+    }
+
+    static func downloadImageEntries(numberOfImages: Int, marketCode: String?) async throws -> [ImageEntry] {
         // TODO: @2h4u: idx is the start index of the batch of image descriptors that is downloaded, maybe add support for it so more images from the past can be used?
-        let response = try await downloadData(from: URL(string: "https://www.bing.com/HPImageArchive.aspx?format=js&n=\(numberOfImages)&idx=0")!)
+        let response = try await downloadData(from: imageArchiveUrl(numberOfImages: numberOfImages, marketCode: marketCode))
         return try JSONDecoder().decode(ImageArchive.self, from: response.data).images
     }
     
