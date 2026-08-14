@@ -56,6 +56,13 @@ class Database {
         try managedContext.save()
         return deletedFileNames
     }
+
+    @MainActor
+    func deleteAllImageDescriptors() throws {
+        let managedContext = persistentContainer.viewContext
+        allImageDescriptors().forEach { managedContext.delete($0) }
+        try managedContext.save()
+    }
     
     @MainActor
     func updateImageDescriptors(from imageEntries: [DownloadManager.ImageEntry], marketCode: String?) -> [ImageDescriptor] {

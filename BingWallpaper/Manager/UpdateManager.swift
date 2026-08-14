@@ -59,7 +59,7 @@ struct WallpaperUpdateStatus: Equatable {
 
 protocol UpdateManagerDelegate: AnyObject {
     @MainActor
-    func downloadedNewImage()
+    func wallpaperLibraryDidChange()
     @MainActor
     func updateStatusDidChange(_ status: WallpaperUpdateStatus)
 }
@@ -226,7 +226,7 @@ final class UpdateManager: @unchecked Sendable {
                     logger.error("Failed to download image entries for market \(marketCode ?? "automatic", privacy: .public) with error: \(error.localizedDescription, privacy: .public)")
                     await MainActor.run { [weak self] in
                         if downloadedAnImage {
-                            self?.delegate?.downloadedNewImage()
+                            self?.delegate?.wallpaperLibraryDidChange()
                         }
                         self?.finishUpdateWithFailure(stage: .metadata, error: error)
                     }
@@ -269,9 +269,10 @@ final class UpdateManager: @unchecked Sendable {
 
             await MainActor.run { [weak self] in
                 guard let self = self else { return }
-                if downloadedAnImage {
-                    self.delegate?.downloadedNewImage()
-                }
+                // Metadata may have been recreated while the image files were
+                // already on disk (for example after Reset Database), so the UI
+                // must refresh even when no download occurred.
+                self.delegate?.wallpaperLibraryDidChange()
                 if let imageFailureRequiringRetry {
                     self.finishUpdateWithFailure(
                         stage: .images,

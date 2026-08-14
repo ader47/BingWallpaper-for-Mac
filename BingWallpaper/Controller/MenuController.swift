@@ -522,7 +522,7 @@ class MenuController: NSObject {
 // MARK: - Delegates
 
 extension MenuController: UpdateManagerDelegate {
-    func downloadedNewImage() {
+    func wallpaperLibraryDidChange() {
         showNewestImage()
     }
 
@@ -549,6 +549,10 @@ extension MenuController: SettingsVcDelegate {
     }
 
     func wallpaperStorageDidChange() {
+        showNewestImage()
+    }
+
+    func wallpaperDatabaseDidReset() {
         showNewestImage()
     }
 

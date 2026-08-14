@@ -15,6 +15,8 @@ protocol SettingsVcDelegate: AnyObject {
     @MainActor
     func wallpaperStorageDidChange()
     @MainActor
+    func wallpaperDatabaseDidReset()
+    @MainActor
     func showMenuBarIcon()
     @MainActor
     func hideMenuBarIcon()
@@ -153,19 +155,17 @@ class SettingsVc: NSViewController {
     
     @IBAction func resetDatabaseButtonAction(_ sender: NSButton) {
         logger.info("Resetting Database...")
-        settings.favoriteWallpaperIDs = []
-        settings.pinnedWallpaperID = nil
-        settings.wallpaperDisplayProfiles = settings.wallpaperDisplayProfiles.mapValues { profile in
-            var profile = profile
-            profile.pinnedWallpaperID = nil
-            return profile
-        }
-        let dateFormatter = DateFormatter()
-        dateFormatter.dateFormat = "yyyyMMdd"
-        let oldestDateStringToKeep = dateFormatter.string(from: Date())
-        
         do {
-           try Database.instance.deleteImageDescriptors(olderThan: oldestDateStringToKeep)
+            try Database.instance.deleteAllImageDescriptors()
+            settings.favoriteWallpaperIDs = []
+            settings.pinnedWallpaperID = nil
+            settings.wallpaperDisplayProfiles = settings.wallpaperDisplayProfiles.mapValues { profile in
+                var profile = profile
+                profile.pinnedWallpaperID = nil
+                return profile
+            }
+            delegate?.wallpaperDatabaseDidReset()
+            updateManager?.update()
         } catch let error {
             logger.error("Failed resetting Database: \(error.localizedDescription, privacy: .public)")
             let alert = NSAlert()
@@ -176,8 +176,6 @@ class SettingsVc: NSViewController {
             alert.window.defaultButtonCell = updateButton.cell as? NSButtonCell
             alert.runModal()
         }
-        
-        updateManager?.update()
     }
     
     // MARK: - Private
