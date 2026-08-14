@@ -104,6 +104,22 @@ final class DownloadValidationTests: XCTestCase {
         )
         XCTAssertNil(AppUpdateManager.latestReleaseAPIURL(repository: "../unexpected"))
     }
+
+    func testInstallerPathStaysInsideTemporaryDirectory() {
+        let installerURL = FileHandler.pkgInstallerPathUrl(
+            appVersion: "v1/../../outside"
+        )
+        let temporaryDirectory = URL(
+            fileURLWithPath: NSTemporaryDirectory(),
+            isDirectory: true
+        )
+
+        XCTAssertEqual(
+            installerURL.deletingLastPathComponent().standardizedFileURL,
+            temporaryDirectory.standardizedFileURL
+        )
+        XCTAssertEqual(installerURL.lastPathComponent, "BingWallpaper_v1-..-..-outside.pkg")
+    }
 }
 
 final class BingMetadataValidationTests: XCTestCase {

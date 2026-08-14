@@ -241,8 +241,20 @@ class FileHandler {
     }
     
     static func pkgInstallerPathUrl(appVersion: String) -> URL {
+        let allowedCharacters = CharacterSet.alphanumerics.union(
+            CharacterSet(charactersIn: ".-_")
+        )
+        let sanitizedVersion = appVersion.unicodeScalars.map {
+            allowedCharacters.contains($0) ? String($0) : "-"
+        }.joined()
+        let safeVersion = sanitizedVersion.isEmpty
+            ? "update"
+            : String(sanitizedVersion.prefix(80))
         var temporaryDirectoryUrl = URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true)
-        temporaryDirectoryUrl.appendPathComponent("BingWallpaper_" + appVersion + ".pkg")
+        temporaryDirectoryUrl.appendPathComponent(
+            "BingWallpaper_\(safeVersion).pkg",
+            isDirectory: false
+        )
         return temporaryDirectoryUrl
     }
 }
