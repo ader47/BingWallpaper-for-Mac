@@ -26,21 +26,36 @@ class Database {
     
     @MainActor
     func allImageDescriptors() -> [ImageDescriptor] {
+        return fetchImageDescriptors()
+    }
+
+    @MainActor
+    func allImageDescriptors(marketCode: String?) -> [ImageDescriptor] {
+        return fetchImageDescriptors(predicate: marketPredicate(marketCode))
+    }
+
+    @MainActor
+    private func fetchImageDescriptors(predicate: NSPredicate? = nil) -> [ImageDescriptor] {
         let fetchRequest = NSFetchRequest<ImageDescriptor>(entityName: "ImageDescriptor")
+        fetchRequest.predicate = predicate
+        fetchRequest.sortDescriptors = [
+            NSSortDescriptor(key: "startDate", ascending: true),
+            NSSortDescriptor(key: "marketCode", ascending: true)
+        ]
         
         do {
-            return try persistentContainer.viewContext
-                .fetch(fetchRequest)
-                .sorted()
+            return try persistentContainer.viewContext.fetch(fetchRequest)
         } catch let error as NSError {
             logger.error("Could not fetch. \(error, privacy: .public), \(error.userInfo, privacy: .public)")
             return []
         }
     }
 
-    @MainActor
-    func allImageDescriptors(marketCode: String?) -> [ImageDescriptor] {
-        return allImageDescriptors().filter { $0.marketCode == marketCode }
+    private func marketPredicate(_ marketCode: String?) -> NSPredicate {
+        if let marketCode {
+            return NSPredicate(format: "marketCode == %@", marketCode)
+        }
+        return NSPredicate(format: "marketCode == nil")
     }
     
     @MainActor
@@ -50,10 +65,12 @@ class Database {
         preserving wallpaperIDs: Set<String> = []
     ) throws -> Set<String> {
         let managedContext = persistentContainer.viewContext
-        let descriptorsToDelete = allImageDescriptors()
+        let candidates = fetchImageDescriptors(
+            predicate: NSPredicate(format: "startDate <= %@", oldestDateStringToKeep)
+        )
+        let descriptorsToDelete = candidates
             .filter {
-                $0.startDate <= oldestDateStringToKeep &&
-                    wallpaperIDs.contains($0.wallpaperIdentifier) == false
+                wallpaperIDs.contains($0.wallpaperIdentifier) == false
             }
         let deletedFileNames = Set(descriptorsToDelete.map { $0.image.fileName })
         descriptorsToDelete.forEach { managedContext.delete($0) }
@@ -110,8 +127,17 @@ class Database {
         // Retry missing files while they are still part of Bing's current
         // archive response. Historical descriptors must not keep an otherwise
         // healthy update in a permanent retry loop when their remote URL expires.
-        let currentDescriptors = allImageDescriptors(marketCode: marketCode)
-            .filter { requestedStartDates.contains($0.startDate) }
+        let currentDescriptors: [ImageDescriptor]
+        if requestedStartDates.isEmpty {
+            currentDescriptors = []
+        } else {
+            currentDescriptors = fetchImageDescriptors(
+                predicate: NSCompoundPredicate(andPredicateWithSubpredicates: [
+                    marketPredicate(marketCode),
+                    NSPredicate(format: "startDate IN %@", Array(requestedStartDates))
+                ])
+            )
+        }
         return ImageDescriptorUpdate(
             descriptors: currentDescriptors,
             wallpaperIDsRequiringDownload: wallpaperIDsRequiringDownload
