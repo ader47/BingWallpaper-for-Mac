@@ -97,7 +97,7 @@ class MenuController: NSObject {
     @MainActor
     @objc func checkForAppUpdate(sender: NSMenuItem) {
         Task {
-            await AppUpdateManager.checkForUpdate()
+            await AppUpdateManager.checkForUpdate(notifyUserAboutNoNewVersion: true)
         }
     }
     
@@ -224,6 +224,10 @@ extension MenuController: NSMenuDelegate {
 
 extension MenuController: SettingsVcDelegate {
     func bingMarketDidChange() {
+        showNewestImage()
+    }
+
+    func wallpaperStorageDidChange() {
         showNewestImage()
     }
 

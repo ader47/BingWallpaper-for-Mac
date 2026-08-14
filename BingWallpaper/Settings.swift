@@ -43,9 +43,14 @@ struct BingMarketOption: Equatable {
 }
 
 public class Settings {
-    private let defaults = UserDefaults.standard
+    private let defaults: UserDefaults
 
-    public init() {
+    public convenience init() {
+        self.init(defaults: .standard)
+    }
+
+    init(defaults: UserDefaults) {
+        self.defaults = defaults
         migrateLegacyLoginItemIfNeeded()
     }
 
@@ -108,12 +113,44 @@ public class Settings {
     }
     
     var imageDownloadPath: URL {
-        get {
+        guard let bookmarkData = defaults.data(forKey: Settings.IMAGE_DOWNLOAD_PATH_BOOKMARK) else {
             return defaults.url(forKey: Settings.IMAGE_DOWNLOAD_PATH) ?? FileHandler.defaultBingWallpaperDirectory()
         }
-        set {
-            defaults.set(newValue, forKey: Settings.IMAGE_DOWNLOAD_PATH)
+
+        var isStale = false
+        do {
+            let url = try URL(
+                resolvingBookmarkData: bookmarkData,
+                options: [.withSecurityScope, .withoutUI],
+                relativeTo: nil,
+                bookmarkDataIsStale: &isStale
+            )
+            if isStale {
+                do {
+                    try saveImageDownloadPathBookmark(for: url)
+                } catch {
+                    logger.error("Failed to refresh stale image directory bookmark: \(error.localizedDescription, privacy: .public)")
+                }
+            }
+            return url
+        } catch {
+            logger.error("Failed to resolve image directory bookmark: \(error.localizedDescription, privacy: .public)")
+            return defaults.url(forKey: Settings.IMAGE_DOWNLOAD_PATH) ?? FileHandler.defaultBingWallpaperDirectory()
         }
+    }
+
+    func setImageDownloadPath(_ url: URL) throws {
+        try saveImageDownloadPathBookmark(for: url)
+        defaults.set(url, forKey: Settings.IMAGE_DOWNLOAD_PATH)
+    }
+
+    private func saveImageDownloadPathBookmark(for url: URL) throws {
+        let bookmarkData = try url.bookmarkData(
+            options: .withSecurityScope,
+            includingResourceValuesForKeys: nil,
+            relativeTo: nil
+        )
+        defaults.set(bookmarkData, forKey: Settings.IMAGE_DOWNLOAD_PATH_BOOKMARK)
     }
 
     /// The explicit Bing market selected by the user, or `nil` when Bing
@@ -198,6 +235,7 @@ public class Settings {
     private static let SM_LOGIN_ENABLED_LEGACY = "SM_LOGIN_ENABLED"
     private static let HIDE_MENU_BAR_ICON = "HIDE_MENU_BAR_ICON"
     private static let IMAGE_DOWNLOAD_PATH = "IMAGE_DOWNLOAD_PATH"
+    private static let IMAGE_DOWNLOAD_PATH_BOOKMARK = "IMAGE_DOWNLOAD_PATH_BOOKMARK"
     private static let BING_MARKET_CODE = "BING_MARKET_CODE"
     private static let LAST_UPDATE = "LAST_UPDATE"
     private static let KEEP_IMAGE_DURATION = "KEEP_IMAGE_DURATION"

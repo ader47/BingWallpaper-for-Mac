@@ -7,6 +7,7 @@
 
 import Foundation
 import AppKit
+import CryptoKit
 import OSLog
 
 private let logger = Logger(
@@ -15,18 +16,52 @@ private let logger = Logger(
 )
 
 class AppUpdateManager {
-    
-    private static let githubLatestReleaseUrl = URL(string: "https://github.com/2h4u/BingWallpaper-for-Mac/releases/latest")!
-    private static let githubExpandedAssetsPrefix = "https://github.com/2h4u/BingWallpaper-for-Mac/releases/expanded_assets/"
-    private static let githubDomain = "https://github.com"
+
+    private struct GitHubRelease: Decodable {
+        let tagName: String
+        let assets: [GitHubAsset]
+
+        enum CodingKeys: String, CodingKey {
+            case tagName = "tag_name"
+            case assets
+        }
+    }
+
+    private struct GitHubAsset: Decodable {
+        let name: String
+        let browserDownloadUrl: URL
+
+        enum CodingKeys: String, CodingKey {
+            case name
+            case browserDownloadUrl = "browser_download_url"
+        }
+    }
+
+    private static let githubLatestReleaseApiUrl = URL(string: "https://api.github.com/repos/2h4u/BingWallpaper-for-Mac/releases/latest")!
     
     static func currentAppVersion() -> String {
-        return Bundle.main.infoDictionary!["CFBundleShortVersionString"] as! String
+        return Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "0.0.0"
     }
-    
+
+    private static func fetchLatestReleaseFromGithub() async -> GitHubRelease? {
+        do {
+            return try await DownloadManager.downloadJson(
+                GitHubRelease.self,
+                from: githubLatestReleaseApiUrl,
+                headers: [
+                    "Accept": "application/vnd.github+json",
+                    "User-Agent": "BingWallpaper/\(currentAppVersion())",
+                    "X-GitHub-Api-Version": "2022-11-28"
+                ]
+            )
+        } catch {
+            logger.error("Failed to fetch the latest GitHub release: \(error.localizedDescription, privacy: .public)")
+            return nil
+        }
+    }
+
     static func fetchLatestAppVersionFromGithub() async -> String? {
-        let latestHtmlHeaders = await DownloadManager.downloadHtmlHeaders(from: githubLatestReleaseUrl)
-        return latestHtmlHeaders?.url?.lastPathComponent
+        return await fetchLatestReleaseFromGithub()?.tagName
     }
     
     private static func newVersionAvailable(_ currentAppVersion: String, _ latestAppVersion: String) -> Bool {
@@ -36,10 +71,12 @@ class AppUpdateManager {
     }
     
     static func checkForUpdate(notifyUserAboutNoNewVersion:Bool = false) async {
-        guard let latestGithubAppVersion = await fetchLatestAppVersionFromGithub() else {
+        guard let latestRelease = await fetchLatestReleaseFromGithub() else {
             logger.error("Failed to fetch latest app version from github")
             return
         }
+
+        let latestGithubAppVersion = latestRelease.tagName
         
         let currentAppVersion = currentAppVersion()
         
@@ -52,16 +89,8 @@ class AppUpdateManager {
             return
         }
         
-        if let pkgInstallerPathUrl = FileHandler.pkgInstallerAlreadyDownloaded(appVersion: latestGithubAppVersion) {
-            if await showShouldUpdateNowDialog(currentAppVersion: currentAppVersion, latestAppVersion: latestGithubAppVersion) == true {
-                NSWorkspace.shared.open(pkgInstallerPathUrl)
-            }
-            return
-        }
-        
-        
-        guard let pkgInstaller = await downloadLatestInstallerFromGithub(latestGithubAppVersion: latestGithubAppVersion) else {
-            logger.error("Failed to download latest app installer from github")
+        guard let pkgInstaller = await downloadVerifiedInstaller(from: latestRelease) else {
+            logger.error("Failed to download and verify the latest app installer")
             return
         }
         
@@ -74,23 +103,41 @@ class AppUpdateManager {
         }
     }
     
-    static func downloadLatestInstallerFromGithub(latestGithubAppVersion: String) async -> Data? {
-        var githubExpandedAssetsUrl = URL(string: githubExpandedAssetsPrefix)!
-        githubExpandedAssetsUrl.appendPathComponent(latestGithubAppVersion)
-        
-        guard let html = await DownloadManager.downloadHtml(from: githubExpandedAssetsUrl) else { return nil }
-        
-        guard let aHref = html.split(separator: "\n").filter({ line in line.contains(".pkg") && line.contains("/\(latestGithubAppVersion)/")}).first else {
-            assertionFailure("Failed to extract pkg link from latest github release website: \(html)")
+    private static func downloadVerifiedInstaller(from release: GitHubRelease) async -> Data? {
+        guard let packageAsset = release.assets.first(where: { $0.name.hasSuffix(".pkg") }),
+              let checksumAsset = release.assets.first(where: { $0.name == packageAsset.name + ".sha256" }) else {
+            logger.error("Release \(release.tagName, privacy: .public) is missing its installer or SHA-256 asset")
             return nil
-         }
-        
-        let newAppVersionDownloadPostfix = aHref.components(separatedBy: "href=\"").dropFirst().first!.components(separatedBy: "\"").first!
-        
-        var newAppVersionDownloadUrl = URL(string: githubDomain)!
-        newAppVersionDownloadUrl.appendPathComponent(newAppVersionDownloadPostfix)
+        }
 
-        return try? await DownloadManager.downloadBinary(from: newAppVersionDownloadUrl)
+        do {
+            async let packageData = DownloadManager.downloadPackage(from: packageAsset.browserDownloadUrl)
+            async let checksumText = DownloadManager.downloadText(from: checksumAsset.browserDownloadUrl)
+            let (installer, checksum) = try await (packageData, checksumText)
+            guard verifyChecksum(packageData: installer, checksumText: checksum) else {
+                logger.error("SHA-256 verification failed for \(packageAsset.name, privacy: .public)")
+                return nil
+            }
+            return installer
+        } catch {
+            logger.error("Failed downloading release assets: \(error.localizedDescription, privacy: .public)")
+            return nil
+        }
+    }
+
+    static func sha256Hex(for data: Data) -> String {
+        return SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
+    }
+
+    static func verifyChecksum(packageData: Data, checksumText: String) -> Bool {
+        guard let expectedChecksum = checksumText
+            .split(whereSeparator: { $0.isWhitespace })
+            .first?
+            .lowercased(),
+              expectedChecksum.count == 64 else {
+            return false
+        }
+        return sha256Hex(for: packageData) == expectedChecksum
     }
     
     @MainActor
@@ -100,7 +147,7 @@ class AppUpdateManager {
         let alert = NSAlert()
         alert.messageText = "New version of BingWallpaper available"
         alert.informativeText = "Do you want to update now?\nCurrent version: \(currentAppVersion)\nNew version: \(latestAppVersion)"
-        let updateButton = alert.addButton(withTitle: "Upate")
+        let updateButton = alert.addButton(withTitle: "Update")
         alert.addButton(withTitle: "Later")
         alert.alertStyle = .informational
         

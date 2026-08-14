@@ -29,7 +29,9 @@ jobs:
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           echo "Building version $VERSION (build ${GITHUB_RUN_NUMBER})"
 
-      - name: Build (Release, unsigned)
+      # Ad-hoc signing preserves the sandbox/bookmark entitlements. A public
+      # release should replace this with Developer ID signing and notarization.
+      - name: Build (Release, ad-hoc signed)
         env:
           VERSION: ${{ steps.version.outputs.version }}
         run: |
@@ -38,8 +40,10 @@ jobs:
             -project BingWallpaper.xcodeproj \
             -target BingWallpaper \
             -configuration Release \
-            CODE_SIGN_IDENTITY="" \
-            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="-" \
+            CODE_SIGN_STYLE=Manual \
+            CODE_SIGN_INJECT_BASE_ENTITLEMENTS=NO \
+            DEVELOPMENT_TEAM="" \
             MARKETING_VERSION="$VERSION" \
             CURRENT_PROJECT_VERSION="${GITHUB_RUN_NUMBER}"
 
@@ -59,6 +63,9 @@ jobs:
                    --install-location /Applications \
                    "../../BingWallpaper_${VERSION}.pkg"
 
+          cd ../../
+          shasum -a 256 "BingWallpaper_${VERSION}.pkg" > "BingWallpaper_${VERSION}.pkg.sha256"
+
       - name: Publish GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
@@ -69,4 +76,5 @@ jobs:
             --title "v${VERSION}" \
             --generate-notes \
             "BingWallpaper_${VERSION}.zip" \
-            "BingWallpaper_${VERSION}.pkg"
+            "BingWallpaper_${VERSION}.pkg" \
+            "BingWallpaper_${VERSION}.pkg.sha256"

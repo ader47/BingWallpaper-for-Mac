@@ -20,6 +20,7 @@ final class UpdateManager: @unchecked Sendable {
     private var activity: NSBackgroundActivityScheduler?
     private var pendingCompletion: NSBackgroundActivityScheduler.CompletionHandler?
     private var consecutiveFailures = 0
+    private var isUpdating = false
 
     private static let RETRY_BASE_INTERVAL: TimeInterval = 30
     private static let RETRY_MAX_INTERVAL: TimeInterval = 30 * 60
@@ -94,6 +95,12 @@ final class UpdateManager: @unchecked Sendable {
     
     @MainActor
     @objc func update() {
+        guard isUpdating == false else {
+            logger.info("An update is already running; coalescing the request")
+            return
+        }
+
+        isUpdating = true
         logger.info("Updating")
         let marketCode = settings.bingMarketCode
 
@@ -105,36 +112,42 @@ final class UpdateManager: @unchecked Sendable {
             } catch {
                 logger.error("Failed to download image entries with error: \(error.localizedDescription, privacy: .public)")
                 await MainActor.run { [weak self] in
-                    guard let self = self else { return }
-                    let completion = self.pendingCompletion
-                    self.pendingCompletion = nil
-                    completion?(.deferred)
-                    self.scheduleRetryAfterFailure()
+                    self?.finishUpdateWithFailure()
                 }
                 return
             }
 
            let descriptors = Database.instance.updateImageDescriptors(from: imageEntries, marketCode: marketCode)
 
-           let newDescriptors = descriptors
+           let missingDescriptors = descriptors
                 .filter { $0.image.isOnDisk() == false }
 
-            for descriptor in newDescriptors {
+            var imageDownloadFailed = false
+            var downloadedAnImage = false
+            for descriptor in missingDescriptors {
                 do {
                     try await descriptor.image.downloadAndSaveToDisk()
+                    downloadedAnImage = true
                 } catch {
+                    imageDownloadFailed = true
                     logger.error("Failed to download and store image \(descriptor.imageUrl, privacy: .public) with error: \(error.localizedDescription, privacy: .public)")
                 }
             }
 
             await MainActor.run { [weak self] in
                 guard let self = self else { return }
+                if downloadedAnImage {
+                    self.delegate?.downloadedNewImage()
+                }
+                if imageDownloadFailed {
+                    self.finishUpdateWithFailure()
+                    return
+                }
+
+                self.isUpdating = false
                 self.settings.lastUpdate = Date()
                 self.consecutiveFailures = 0
                 self.cleanup()
-                if newDescriptors.isEmpty == false {
-                    self.delegate?.downloadedNewImage()
-                }
 
                 let completion = self.pendingCompletion
                 self.pendingCompletion = nil
@@ -143,6 +156,15 @@ final class UpdateManager: @unchecked Sendable {
                 self.scheduleNextActivity()
             }
         }
+    }
+
+    @MainActor
+    private func finishUpdateWithFailure() {
+        isUpdating = false
+        let completion = pendingCompletion
+        pendingCompletion = nil
+        completion?(.deferred)
+        scheduleRetryAfterFailure()
     }
 
     @MainActor

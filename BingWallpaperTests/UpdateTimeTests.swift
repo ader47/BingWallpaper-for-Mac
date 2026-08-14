@@ -54,3 +54,73 @@ final class BingMarketTests: XCTestCase {
         XCTAssertTrue(codes.allSatisfy { $0.range(of: "^[a-z]{2}-[A-Z]{2}$", options: .regularExpression) != nil })
     }
 }
+
+final class DownloadValidationTests: XCTestCase {
+    func testRejectsHttpErrorStatus() {
+        let response = HTTPURLResponse(
+            url: URL(string: "https://example.com/image.jpg")!,
+            statusCode: 404,
+            httpVersion: nil,
+            headerFields: nil
+        )!
+
+        XCTAssertThrowsError(try DownloadManager.validateHttpResponse(response))
+    }
+
+    func testRecognizesFlatInstallerPackageMagic() {
+        XCTAssertTrue(DownloadManager.isValidInstallerPackage(Data([0x78, 0x61, 0x72, 0x21, 0x00])))
+        XCTAssertFalse(DownloadManager.isValidInstallerPackage(Data("<html>not a package</html>".utf8)))
+    }
+
+    func testRejectsInvalidImageData() {
+        XCTAssertFalse(DownloadManager.isValidImageData(Data("<html>not an image</html>".utf8)))
+    }
+
+    func testSha256ChecksumVerification() {
+        let packageData = Data("abc".utf8)
+        let checksum = "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad  BingWallpaper.pkg\n"
+
+        XCTAssertTrue(AppUpdateManager.verifyChecksum(packageData: packageData, checksumText: checksum))
+        XCTAssertFalse(AppUpdateManager.verifyChecksum(packageData: packageData, checksumText: String(repeating: "0", count: 64)))
+    }
+}
+
+final class ImageDirectorySettingsTests: XCTestCase {
+    func testSecurityScopedBookmarkRoundTrip() throws {
+        let suiteName = "BingWallpaperTests.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("BingWallpaperTests-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        let settings = Settings(defaults: defaults)
+        try settings.setImageDownloadPath(directory)
+
+        XCTAssertEqual(settings.imageDownloadPath.standardizedFileURL, directory.standardizedFileURL)
+    }
+}
+
+final class WallpaperManagerTests: XCTestCase {
+    func testEquivalentFileURLsMatch() {
+        let currentURL = URL(fileURLWithPath: "/tmp/wallpapers/../wallpapers/current.jpg")
+        let desiredURL = URL(fileURLWithPath: "/tmp/wallpapers/current.jpg")
+
+        XCTAssertTrue(WallpaperManager.wallpaperURL(currentURL, matches: desiredURL))
+    }
+
+    func testDifferentFileURLsDoNotMatch() {
+        let currentURL = URL(fileURLWithPath: "/tmp/wallpapers/previous.jpg")
+        let desiredURL = URL(fileURLWithPath: "/tmp/wallpapers/current.jpg")
+
+        XCTAssertFalse(WallpaperManager.wallpaperURL(currentURL, matches: desiredURL))
+    }
+
+    func testMissingCurrentURLDoesNotMatch() {
+        let desiredURL = URL(fileURLWithPath: "/tmp/wallpapers/current.jpg")
+
+        XCTAssertFalse(WallpaperManager.wallpaperURL(nil, matches: desiredURL))
+    }
+}

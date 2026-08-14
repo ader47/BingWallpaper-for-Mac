@@ -10,3 +10,8 @@ and sets it as wallpaper for all your monitors (and spaces!).
 By default, Bing selects the wallpaper market from your network location. You
 can also choose any supported Bing country/region and language market in the
 app settings.
+
+Custom image locations are persisted using a macOS security-scoped bookmark.
+Downloaded images are validated before they are stored, and app updates are
+accepted only when the installer matches the SHA-256 checksum published with
+the GitHub release.

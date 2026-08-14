@@ -52,18 +52,35 @@ class WallpaperManager {
         imageDescriptor = descriptor
         updateWallpaperIfNeeded()
     }
+
+    static func wallpaperURL(_ currentURL: URL?, matches desiredURL: URL) -> Bool {
+        guard let currentURL else { return false }
+
+        if currentURL.isFileURL && desiredURL.isFileURL {
+            return currentURL.standardizedFileURL.resolvingSymlinksInPath()
+                == desiredURL.standardizedFileURL.resolvingSymlinksInPath()
+        }
+
+        return currentURL.absoluteURL == desiredURL.absoluteURL
+    }
     
     private func updateWallpaperIfNeeded() {
         guard let descriptor = imageDescriptor else { return }
         let imageUrl = descriptor.image.downloadPath
         let workspace = NSWorkspace.shared
         
-        do {
+        FileHandler.withWallpaperDirectoryAccess { _ in
             for screen in NSScreen.screens {
-                try workspace.setDesktopImageURL(imageUrl, for: screen, options: [:])
+                guard !Self.wallpaperURL(workspace.desktopImageURL(for: screen), matches: imageUrl) else {
+                    continue
+                }
+
+                do {
+                    try workspace.setDesktopImageURL(imageUrl, for: screen, options: [:])
+                } catch {
+                    logger.error("Failed to set desktop image: \(error.localizedDescription, privacy: .public)")
+                }
             }
-        } catch {
-            logger.error("Failed to set desktop image: \(error.localizedDescription, privacy: .public)")
         }
     }
 }

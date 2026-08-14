@@ -12,8 +12,12 @@ class Image {
         case missingDescriptor
     }
     
-    let downloadPath: URL
+    let fileName: String
     private weak var descriptor: ImageDescriptor?
+
+    var downloadPath: URL {
+        return FileHandler.wallpaperDirectory().appendingPathComponent(fileName)
+    }
     
     init(descriptor: ImageDescriptor) {
         self.descriptor = descriptor
@@ -24,18 +28,18 @@ class Image {
             // Keep the legacy name for automatic/network-location images.
             fileName = descriptor.startDate + ".jpg"
         }
-        self.downloadPath = FileHandler.defaultBingWallpaperDirectory().appendingPathComponent(fileName)
+        self.fileName = fileName
     }
     
     func loadFromDisk() async throws -> Data {
-        return try Data(contentsOf: downloadPath)
+        return try FileHandler.loadImageDataFromDisk(at: downloadPath)
     }
     
     func downloadAndSaveToDisk() async throws {
         guard let descriptor else {
             throw Error.missingDescriptor
         }
-        let imageData = try await DownloadManager.downloadBinary(from: descriptor.imageUrl)
+        let imageData = try await DownloadManager.downloadImage(from: descriptor.imageUrl)
         try FileHandler.saveImageDataToDisk(imageData: imageData, toUrl: downloadPath)
     }
     
@@ -44,6 +48,6 @@ class Image {
     }
     
     func isOnDisk() -> Bool {
-        return FileManager.default.fileExists(atPath: downloadPath.relativePath)
+        return FileHandler.wallpaperFileExists(at: downloadPath)
     }
 }

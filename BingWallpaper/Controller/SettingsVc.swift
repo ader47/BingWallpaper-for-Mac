@@ -11,6 +11,8 @@ protocol SettingsVcDelegate: AnyObject {
     @MainActor
     func bingMarketDidChange()
     @MainActor
+    func wallpaperStorageDidChange()
+    @MainActor
     func showMenuBarIcon()
     @MainActor
     func hideMenuBarIcon()
@@ -88,9 +90,16 @@ class SettingsVc: NSViewController {
         
         if dialog.runModal() == NSApplication.ModalResponse.OK {
             guard let result = dialog.url else { return }
-            settings.imageDownloadPath = result
-            imagePathButton.title = result.path
-            imagePathButton.toolTip = result.path
+            do {
+                try settings.setImageDownloadPath(result)
+                imagePathButton.title = result.path
+                imagePathButton.toolTip = result.path
+                delegate?.wallpaperStorageDidChange()
+                updateManager?.update()
+            } catch {
+                logger.error("Failed to save image directory permission: \(error.localizedDescription, privacy: .public)")
+                presentImagePathError(error)
+            }
         }
     }
 
@@ -196,6 +205,15 @@ class SettingsVc: NSViewController {
     private func presentLaunchAtLoginError(_ error: Error) {
         let alert = NSAlert()
         alert.messageText = "Couldn't update Launch at Login"
+        alert.informativeText = error.localizedDescription
+        alert.alertStyle = .warning
+        alert.addButton(withTitle: "Ok")
+        alert.runModal()
+    }
+
+    private func presentImagePathError(_ error: Error) {
+        let alert = NSAlert()
+        alert.messageText = "Couldn't use the selected image location"
         alert.informativeText = error.localizedDescription
         alert.alertStyle = .warning
         alert.addButton(withTitle: "Ok")

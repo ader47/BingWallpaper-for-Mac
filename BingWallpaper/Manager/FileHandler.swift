@@ -1,5 +1,5 @@
-import AppKit
 import Foundation
+import ImageIO
 import OSLog
 
 private let logger = Logger(
@@ -24,38 +24,59 @@ class FileHandler {
     static func defaultBingWallpaperDirectory() -> URL {
         return URL(fileURLWithPath: defaultBingWallpaperDirectory(), isDirectory: true)
     }
+
+    static func wallpaperDirectory() -> URL {
+        return Settings().imageDownloadPath
+    }
+
+    @discardableResult
+    static func withWallpaperDirectoryAccess<T>(_ operation: (URL) throws -> T) rethrows -> T {
+        let directory = wallpaperDirectory()
+        let didStartAccess = directory.startAccessingSecurityScopedResource()
+        defer {
+            if didStartAccess {
+                directory.stopAccessingSecurityScopedResource()
+            }
+        }
+        return try operation(directory)
+    }
     
     static func createWallpaperFolderIfNeeded() {
-        let bingDir: String = Settings().imageDownloadPath.path
-        
-        if FileManager.default.fileExists(atPath: bingDir) { return }
-        
         do {
-            try FileManager.default.createDirectory(atPath: bingDir, withIntermediateDirectories: false)
+            try withWallpaperDirectoryAccess { directory in
+                if FileManager.default.fileExists(atPath: directory.path) { return }
+                try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+            }
         } catch {
             logger.error("Failed to create bing-wallpapers folder with error: \(error.localizedDescription, privacy: .public)")
         }
     }
     
-    static func saveImageToDisk(image: NSImage, toUrl: URL) {
-        guard let tiffRepresentation = image.tiffRepresentation,
-              let bitmap = NSBitmapImageRep(data: tiffRepresentation),
-              let imageData = bitmap.representation(using: .jpeg, properties: [:]) else { return }
-        
-        do {
-            try imageData.write(to: toUrl, options: .withoutOverwriting)
-        } catch {
-            logger.error("Failed to save image to disk with error: \(error.localizedDescription, privacy: .public)")
+    static func saveImageDataToDisk(imageData: Data, toUrl: URL) throws {
+        try withWallpaperDirectoryAccess { _ in
+            try imageData.write(to: toUrl, options: .atomic)
         }
     }
-    
-    static func saveImageDataToDisk(imageData: Data, toUrl: URL) throws {
-        try imageData.write(to: toUrl, options: .withoutOverwriting)
+
+    static func loadImageDataFromDisk(at url: URL) throws -> Data {
+        return try withWallpaperDirectoryAccess { _ in
+            try Data(contentsOf: url)
+        }
+    }
+
+    static func wallpaperFileExists(at url: URL) -> Bool {
+        return withWallpaperDirectoryAccess { _ in
+            guard FileManager.default.fileExists(atPath: url.path) else { return false }
+            guard let source = CGImageSourceCreateWithURL(url as CFURL, nil) else { return false }
+            return CGImageSourceCopyPropertiesAtIndex(source, 0, nil) != nil
+        }
     }
     
     static func getSavedImages() -> [URL] {
         do {
-            return try FileManager.default.contentsOfDirectory(at: Settings().imageDownloadPath, includingPropertiesForKeys: nil, options: FileManager.DirectoryEnumerationOptions.skipsHiddenFiles)
+            return try withWallpaperDirectoryAccess { directory in
+                try FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil, options: .skipsHiddenFiles)
+            }
         } catch {
             logger.error("Failed to list saved images: \(error.localizedDescription, privacy: .public)")
             return []
@@ -64,7 +85,9 @@ class FileHandler {
     
     static func removeImageFromDisk(imagePath: URL) {
         do {
-            return try FileManager.default.removeItem(at: imagePath)
+            return try withWallpaperDirectoryAccess { _ in
+                try FileManager.default.removeItem(at: imagePath)
+            }
         } catch {
             logger.error("Failed to remove image at \(imagePath.path, privacy: .public): \(error.localizedDescription, privacy: .public)")
             return
@@ -86,22 +109,13 @@ class FileHandler {
     static func savePkgInstallerToDisk(pkgInstaller: Data, appVersion: String) -> URL? {
         let temporaryDirectoryUrl = pkgInstallerPathUrl(appVersion: appVersion)
         do {
-            try pkgInstaller.write(to: temporaryDirectoryUrl)
+            try pkgInstaller.write(to: temporaryDirectoryUrl, options: .atomic)
         } catch {
             logger.error("Failed to save pkg installer to disk with error: \(error.localizedDescription, privacy: .public)")
             return nil
         }
         
         return temporaryDirectoryUrl
-    }
-    
-    static func pkgInstallerAlreadyDownloaded(appVersion: String) -> URL? {
-        let temporaryDirectoryUrl = pkgInstallerPathUrl(appVersion: appVersion)
-        if FileManager.default.fileExists(atPath: temporaryDirectoryUrl.relativePath) == true {
-            return temporaryDirectoryUrl
-        }
-        
-        return nil
     }
     
     static func pkgInstallerPathUrl(appVersion: String) -> URL {
