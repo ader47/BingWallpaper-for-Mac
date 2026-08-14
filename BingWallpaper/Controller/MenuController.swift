@@ -548,9 +548,8 @@ final class MenuController: NSObject {
         let pinnedDescriptor = settings.pinnedWallpaperID.flatMap { pinnedID in
             downloadedDescriptors.first { $0.wallpaperIdentifier == pinnedID }
         }
-        if settings.pinnedWallpaperID != nil, pinnedDescriptor == nil {
-            settings.pinnedWallpaperID = nil
-        }
+        let pinnedWallpaperIsUnavailable = settings.pinnedWallpaperID != nil
+            && pinnedDescriptor == nil
         let visibleMarketCode = pinnedDescriptor?.marketCode ?? settings.bingMarketCode
         self.descriptors = downloadedDescriptors
             .filter { $0.marketCode == visibleMarketCode }
@@ -569,7 +568,9 @@ final class MenuController: NSObject {
         if let pinnedDescriptor {
             WallpaperManager.shared.setWallpaper(descriptor: pinnedDescriptor)
         } else if let newestDescriptor = descriptors[safe: selectedDescriptorIndex] {
-            WallpaperManager.shared.setWallpaper(descriptor: newestDescriptor)
+            if !pinnedWallpaperIsUnavailable {
+                WallpaperManager.shared.setWallpaper(descriptor: newestDescriptor)
+            }
         } else {
             imageSelectorView?.imageView.image = nil
         }

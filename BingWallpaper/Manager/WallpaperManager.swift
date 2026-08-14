@@ -257,26 +257,22 @@ final class WallpaperManager {
         from downloadedDescriptors: [ImageDescriptor]
     ) -> ImageDescriptor? {
         if profile.pinMode == .inherit,
-           settings.pinnedWallpaperID != nil {
-            return imageDescriptor
+           let pinnedWallpaperID = settings.pinnedWallpaperID {
+            return downloadedDescriptors.first {
+                $0.wallpaperIdentifier == pinnedWallpaperID
+            }
         }
 
         let effectiveMarketCode = profile.effectiveMarketCode(
             globalMarketCode: settings.bingMarketCode
         )
         if profile.pinMode == .pinned {
-            if let pinnedWallpaperID = profile.pinnedWallpaperID,
-               let pinnedDescriptor = downloadedDescriptors.first(where: {
-                   $0.wallpaperIdentifier == pinnedWallpaperID
-               }) {
-                return pinnedDescriptor
+            guard let pinnedWallpaperID = profile.pinnedWallpaperID else {
+                return nil
             }
-
-            let newestDescriptor = downloadedDescriptors
-                .filter { $0.marketCode == effectiveMarketCode }
-                .max()
-            profile.pinnedWallpaperID = newestDescriptor?.wallpaperIdentifier
-            return newestDescriptor
+            return downloadedDescriptors.first {
+                $0.wallpaperIdentifier == pinnedWallpaperID
+            }
         }
 
         if profile.marketMode == .inherit,
