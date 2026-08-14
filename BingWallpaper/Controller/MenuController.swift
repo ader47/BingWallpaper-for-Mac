@@ -257,6 +257,7 @@ class MenuController: NSObject {
         return imageViewWidth / 16*9 + topMargin
     }
     
+    @MainActor
     private func updateSelectedImage(newSelectedDescriptorIndex: Int) {
         guard settings.pinnedWallpaperID == nil else { return }
         if let descriptor = descriptors[safe: newSelectedDescriptorIndex] {

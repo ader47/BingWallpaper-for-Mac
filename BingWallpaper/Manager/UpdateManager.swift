@@ -155,6 +155,11 @@ final class UpdateManager: @unchecked Sendable {
         if let pinnedWallpaperID = settings.pinnedWallpaperID {
             preservedIDs.insert(pinnedWallpaperID)
         }
+        for profile in settings.wallpaperDisplayProfiles.values {
+            if let pinnedWallpaperID = profile.pinnedWallpaperID {
+                preservedIDs.insert(pinnedWallpaperID)
+            }
+        }
         let preservedFileNames = Set(
             Database.instance.allImageDescriptors()
                 .filter { preservedIDs.contains($0.wallpaperIdentifier) }
@@ -206,39 +211,49 @@ final class UpdateManager: @unchecked Sendable {
             consecutiveFailures: consecutiveFailures
         ))
         logger.info("Updating")
-        let marketCode = settings.bingMarketCode
+        let marketCodes = settings.requiredBingMarketCodes
 
         Task { [weak self] in
-
-            let imageEntries: [DownloadManager.ImageEntry]
-            do {
-                imageEntries = try await DownloadManager.downloadImageEntries(numberOfImages: 8, marketCode: marketCode)
-            } catch {
-                logger.error("Failed to download image entries with error: \(error.localizedDescription, privacy: .public)")
-                await MainActor.run { [weak self] in
-                    self?.finishUpdateWithFailure(stage: .metadata, error: error)
-                }
-                return
-            }
-
-           let descriptors = Database.instance.updateImageDescriptors(from: imageEntries, marketCode: marketCode)
-
-           let missingDescriptors = descriptors
-                .filter { $0.image.isOnDisk() == false }
-
             var imageDownloadFailed = false
             var firstImageDownloadError: Error?
             var downloadedAnImage = false
-            for descriptor in missingDescriptors {
+
+            for marketCode in marketCodes {
+                let imageEntries: [DownloadManager.ImageEntry]
                 do {
-                    try await descriptor.image.downloadAndSaveToDisk()
-                    downloadedAnImage = true
+                    imageEntries = try await DownloadManager.downloadImageEntries(
+                        numberOfImages: 8,
+                        marketCode: marketCode
+                    )
                 } catch {
-                    imageDownloadFailed = true
-                    if firstImageDownloadError == nil {
-                        firstImageDownloadError = error
+                    logger.error("Failed to download image entries for market \(marketCode ?? "automatic", privacy: .public) with error: \(error.localizedDescription, privacy: .public)")
+                    await MainActor.run { [weak self] in
+                        if downloadedAnImage {
+                            self?.delegate?.downloadedNewImage()
+                        }
+                        self?.finishUpdateWithFailure(stage: .metadata, error: error)
                     }
-                    logger.error("Failed to download and store image \(descriptor.imageUrl, privacy: .public) with error: \(error.localizedDescription, privacy: .public)")
+                    return
+                }
+
+                let descriptors = Database.instance.updateImageDescriptors(
+                    from: imageEntries,
+                    marketCode: marketCode
+                )
+                let missingDescriptors = descriptors
+                    .filter { $0.image.isOnDisk() == false }
+
+                for descriptor in missingDescriptors {
+                    do {
+                        try await descriptor.image.downloadAndSaveToDisk()
+                        downloadedAnImage = true
+                    } catch {
+                        imageDownloadFailed = true
+                        if firstImageDownloadError == nil {
+                            firstImageDownloadError = error
+                        }
+                        logger.error("Failed to download and store image \(descriptor.imageUrl, privacy: .public) with error: \(error.localizedDescription, privacy: .public)")
+                    }
                 }
             }
 

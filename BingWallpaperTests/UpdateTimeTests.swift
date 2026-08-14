@@ -329,3 +329,80 @@ final class FavoriteWallpaperSettingsTests: XCTestCase {
         operation(Settings(defaults: defaults))
     }
 }
+
+final class WallpaperDisplayProfileTests: XCTestCase {
+    func testProfilesPersistAndDefaultProfilesAreDiscarded() {
+        withSettings { settings in
+            settings.wallpaperDisplayProfiles = [
+                "display-a": WallpaperDisplayProfile(
+                    marketMode: .explicit,
+                    marketCode: "ja-JP",
+                    pinMode: .followLatest,
+                    pinnedWallpaperID: nil
+                ),
+                "display-b": WallpaperDisplayProfile()
+            ]
+
+            XCTAssertEqual(settings.wallpaperDisplayProfiles.count, 1)
+            XCTAssertEqual(
+                settings.wallpaperDisplayProfiles["display-a"]?.marketCode,
+                "ja-JP"
+            )
+            XCTAssertNil(settings.wallpaperDisplayProfiles["display-b"])
+        }
+    }
+
+    func testRequiredMarketsIncludeGlobalAndProfileOverridesWithoutDuplicates() {
+        withSettings { settings in
+            settings.bingMarketCode = "en-US"
+            settings.wallpaperDisplayProfiles = [
+                "display-a": WallpaperDisplayProfile(
+                    marketMode: .explicit,
+                    marketCode: "ja-JP",
+                    pinMode: .inherit,
+                    pinnedWallpaperID: nil
+                ),
+                "display-b": WallpaperDisplayProfile(
+                    marketMode: .automatic,
+                    marketCode: nil,
+                    pinMode: .followLatest,
+                    pinnedWallpaperID: nil
+                ),
+                "display-c": WallpaperDisplayProfile(
+                    marketMode: .explicit,
+                    marketCode: "en-US",
+                    pinMode: .followLatest,
+                    pinnedWallpaperID: nil
+                )
+            ]
+
+            XCTAssertEqual(settings.requiredBingMarketCodes.count, 3)
+            XCTAssertTrue(settings.requiredBingMarketCodes.contains { $0 == "en-US" })
+            XCTAssertTrue(settings.requiredBingMarketCodes.contains { $0 == "ja-JP" })
+            XCTAssertTrue(settings.requiredBingMarketCodes.contains { $0 == nil })
+        }
+    }
+
+    func testEffectiveMarketHonorsInheritAutomaticAndExplicitModes() {
+        XCTAssertEqual(
+            WallpaperDisplayProfile().effectiveMarketCode(globalMarketCode: "en-US"),
+            "en-US"
+        )
+        XCTAssertNil(
+            WallpaperDisplayProfile(marketMode: .automatic)
+                .effectiveMarketCode(globalMarketCode: "en-US")
+        )
+        XCTAssertEqual(
+            WallpaperDisplayProfile(marketMode: .explicit, marketCode: "zh-CN")
+                .effectiveMarketCode(globalMarketCode: "en-US"),
+            "zh-CN"
+        )
+    }
+
+    private func withSettings(_ operation: (Settings) -> Void) {
+        let suiteName = "BingWallpaperTests.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        operation(Settings(defaults: defaults))
+    }
+}

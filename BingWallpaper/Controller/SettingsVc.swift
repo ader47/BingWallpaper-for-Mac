@@ -31,6 +31,8 @@ class SettingsVc: NSViewController {
     private let bingMarketPopUpButton = NSPopUpButton(frame: .zero, pullsDown: false)
     private let wallpaperDisplayLabel = NSTextField(labelWithString: "Apply wallpaper to:")
     private let wallpaperDisplayPopUpButton = NSPopUpButton(frame: .zero, pullsDown: false)
+    private let displayProfilesLabel = NSTextField(labelWithString: "Per-display profiles:")
+    private let displayProfilesButton = NSButton(title: "Configure…", target: nil, action: nil)
     
     private let settings = Settings()
     weak var delegate: SettingsVcDelegate?
@@ -48,12 +50,14 @@ class SettingsVc: NSViewController {
         setKeepImagesText()
         setupBingMarketSelector()
         setupWallpaperDisplaySelector()
+        setupDisplayProfilesButton()
     }
 
     override func viewWillAppear() {
         super.viewWillAppear()
         refreshLaunchAtLoginCheckbox()
         refreshWallpaperDisplaySelector()
+        refreshDisplayProfilesButton()
     }
 
     // MARK: - Actions
@@ -137,6 +141,10 @@ class SettingsVc: NSViewController {
         guard oldMode != newMode || newMode == .selected else { return }
         delegate?.wallpaperDisplaySelectionDidChange()
     }
+
+    @objc private func displayProfilesAction(_ sender: NSButton) {
+        presentDisplayProfileConfiguration()
+    }
     
     @IBAction func keepImagesSliderAction(_ sender: NSSlider) {
         settings.keepImageDuration = sender.integerValue
@@ -147,6 +155,11 @@ class SettingsVc: NSViewController {
         logger.info("Resetting Database...")
         settings.favoriteWallpaperIDs = []
         settings.pinnedWallpaperID = nil
+        settings.wallpaperDisplayProfiles = settings.wallpaperDisplayProfiles.mapValues { profile in
+            var profile = profile
+            profile.pinnedWallpaperID = nil
+            return profile
+        }
         let dateFormatter = DateFormatter()
         dateFormatter.dateFormat = "YYYYMMdd"
         let oldestDateStringToKeep = dateFormatter.string(from: Date())
@@ -245,6 +258,44 @@ class SettingsVc: NSViewController {
         preferredContentSize = NSSize(width: preferredContentSize.width, height: preferredContentSize.height + 40)
     }
 
+    private func setupDisplayProfilesButton() {
+        displayProfilesLabel.translatesAutoresizingMaskIntoConstraints = false
+        displayProfilesButton.translatesAutoresizingMaskIntoConstraints = false
+        displayProfilesButton.target = self
+        displayProfilesButton.action = #selector(displayProfilesAction(_:))
+        displayProfilesButton.alignment = .left
+        view.addSubview(displayProfilesLabel)
+        view.addSubview(displayProfilesButton)
+        refreshDisplayProfilesButton()
+
+        if let imageTopConstraint = view.constraints.first(where: {
+            ($0.firstItem as? NSView) === imagePathButton &&
+            $0.firstAttribute == .top &&
+            ($0.secondItem as? NSView) === wallpaperDisplayPopUpButton &&
+            $0.secondAttribute == .bottom
+        }) {
+            NSLayoutConstraint.deactivate([imageTopConstraint])
+        }
+
+        NSLayoutConstraint.activate([
+            displayProfilesButton.topAnchor.constraint(equalTo: wallpaperDisplayPopUpButton.bottomAnchor, constant: 12),
+            displayProfilesButton.leadingAnchor.constraint(equalTo: imagePathButton.leadingAnchor),
+            displayProfilesButton.widthAnchor.constraint(equalTo: imagePathButton.widthAnchor),
+            imagePathButton.topAnchor.constraint(equalTo: displayProfilesButton.bottomAnchor, constant: 12),
+            displayProfilesLabel.trailingAnchor.constraint(equalTo: displayProfilesButton.leadingAnchor, constant: -8),
+            displayProfilesLabel.centerYAnchor.constraint(equalTo: displayProfilesButton.centerYAnchor)
+        ])
+
+        preferredContentSize = NSSize(width: preferredContentSize.width, height: preferredContentSize.height + 40)
+    }
+
+    private func refreshDisplayProfilesButton() {
+        let count = settings.wallpaperDisplayProfiles.count
+        displayProfilesButton.title = count == 0
+            ? "Configure…"
+            : "Configure (\(count))…"
+    }
+
     private func refreshWallpaperDisplaySelector() {
         let selectedCount = settings.selectedWallpaperDisplayIDs.count
         wallpaperDisplayPopUpButton.removeAllItems()
@@ -328,6 +379,186 @@ class SettingsVc: NSViewController {
 
         settings.selectedWallpaperDisplayIDs = newSelection
         return true
+    }
+
+    private func presentDisplayProfileConfiguration() {
+        let displays = WallpaperManager.connectedDisplays()
+        guard displays.isEmpty == false else {
+            let alert = NSAlert()
+            alert.messageText = "No displays are available"
+            alert.informativeText = "Connect a display and try again."
+            alert.alertStyle = .warning
+            alert.addButton(withTitle: "OK")
+            alert.runModal()
+            return
+        }
+
+        var controls = [(WallpaperDisplayInfo, NSPopUpButton, NSPopUpButton)]()
+        var rows = [[NSView]]()
+        rows.append([
+            profileHeader("Display"),
+            profileHeader("Bing Region"),
+            profileHeader("Update Behavior")
+        ])
+        let profiles = settings.wallpaperDisplayProfiles
+        for display in displays {
+            let profile = profiles[display.identifier] ?? WallpaperDisplayProfile()
+            let marketSelector = displayMarketSelector(for: profile)
+            let pinSelector = displayPinSelector(for: profile)
+            let displayLabel = NSTextField(labelWithString: display.title)
+            displayLabel.lineBreakMode = .byTruncatingTail
+            displayLabel.toolTip = display.title
+            rows.append([displayLabel, marketSelector, pinSelector])
+            controls.append((display, marketSelector, pinSelector))
+        }
+
+        let grid = NSGridView(views: rows)
+        grid.rowSpacing = 8
+        grid.columnSpacing = 10
+        grid.column(at: 0).width = 230
+        grid.column(at: 1).width = 250
+        grid.column(at: 2).width = 170
+        grid.frame = NSRect(
+            x: 0,
+            y: 0,
+            width: 670,
+            height: CGFloat(rows.count) * 34
+        )
+
+        let accessoryView: NSView
+        if rows.count > 6 {
+            let scrollView = NSScrollView(frame: NSRect(x: 0, y: 0, width: 670, height: 220))
+            scrollView.documentView = grid
+            scrollView.hasVerticalScroller = true
+            scrollView.drawsBackground = false
+            accessoryView = scrollView
+        } else {
+            accessoryView = grid
+        }
+
+        let alert = NSAlert()
+        alert.messageText = "Configure Displays"
+        alert.informativeText = "Each display can inherit the global settings or use its own Bing region and update behavior. Disconnected display profiles remain saved."
+        alert.alertStyle = .informational
+        alert.accessoryView = accessoryView
+        alert.addButton(withTitle: "Apply")
+        alert.addButton(withTitle: "Cancel")
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+
+        var updatedProfiles = profiles
+        let descriptors = Database.instance.allImageDescriptors()
+        for (display, marketSelector, pinSelector) in controls {
+            var profile = updatedProfiles[display.identifier] ?? WallpaperDisplayProfile()
+            applyMarketSelection(marketSelector, to: &profile)
+            let oldPinMode = profile.pinMode
+            profile.pinMode = WallpaperDisplayPinMode(
+                rawValue: pinSelector.selectedItem?.representedObject as? String ?? ""
+            ) ?? .inherit
+            if profile.pinMode != .pinned {
+                profile.pinnedWallpaperID = nil
+            } else {
+                let effectiveMarketCode = profile.effectiveMarketCode(
+                    globalMarketCode: settings.bingMarketCode
+                )
+                let oldPinnedDescriptor = profile.pinnedWallpaperID.flatMap { pinnedID in
+                    descriptors.first { $0.wallpaperIdentifier == pinnedID }
+                }
+                if oldPinMode != .pinned || oldPinnedDescriptor?.marketCode != effectiveMarketCode {
+                    let currentWallpaperID = WallpaperManager.currentWallpaperIdentifier(
+                        forDisplayIdentifier: display.identifier
+                    )
+                    let currentDescriptor = currentWallpaperID.flatMap { wallpaperID in
+                        descriptors.first { $0.wallpaperIdentifier == wallpaperID }
+                    }
+                    profile.pinnedWallpaperID = currentDescriptor?.marketCode == effectiveMarketCode
+                        ? currentDescriptor?.wallpaperIdentifier
+                        : descriptors
+                            .filter {
+                                $0.marketCode == effectiveMarketCode && $0.image.isOnDisk()
+                            }
+                            .max()?
+                            .wallpaperIdentifier
+                }
+            }
+
+            if profile.isDefault {
+                updatedProfiles.removeValue(forKey: display.identifier)
+            } else {
+                updatedProfiles[display.identifier] = profile
+            }
+        }
+
+        settings.wallpaperDisplayProfiles = updatedProfiles
+        refreshDisplayProfilesButton()
+        delegate?.wallpaperDisplaySelectionDidChange()
+        updateManager?.update()
+    }
+
+    private func profileHeader(_ title: String) -> NSTextField {
+        let field = NSTextField(labelWithString: title)
+        field.font = .boldSystemFont(ofSize: NSFont.systemFontSize)
+        return field
+    }
+
+    private func displayMarketSelector(for profile: WallpaperDisplayProfile) -> NSPopUpButton {
+        let selector = NSPopUpButton(frame: .zero, pullsDown: false)
+        let globalTitle = BingMarketOption.all.first(where: {
+            $0.code == settings.bingMarketCode
+        })?.title ?? BingMarketOption.automatic.title
+        addProfileOption(title: "Inherit Global — \(globalTitle)", value: "inherit", to: selector)
+        addProfileOption(title: BingMarketOption.automatic.title, value: "automatic", to: selector)
+        for option in BingMarketOption.all where option.code != nil {
+            addProfileOption(title: option.title, value: option.code!, to: selector)
+        }
+
+        let selectedValue: String
+        switch profile.marketMode {
+        case .inherit:
+            selectedValue = "inherit"
+        case .automatic:
+            selectedValue = "automatic"
+        case .explicit:
+            selectedValue = profile.marketCode ?? "inherit"
+        }
+        selector.select(selector.itemArray.first(where: {
+            ($0.representedObject as? String) == selectedValue
+        }))
+        return selector
+    }
+
+    private func displayPinSelector(for profile: WallpaperDisplayProfile) -> NSPopUpButton {
+        let selector = NSPopUpButton(frame: .zero, pullsDown: false)
+        addProfileOption(title: "Inherit Global", value: WallpaperDisplayPinMode.inherit.rawValue, to: selector)
+        addProfileOption(title: "Follow Latest", value: WallpaperDisplayPinMode.followLatest.rawValue, to: selector)
+        addProfileOption(title: "Pin Current", value: WallpaperDisplayPinMode.pinned.rawValue, to: selector)
+        selector.select(selector.itemArray.first(where: {
+            ($0.representedObject as? String) == profile.pinMode.rawValue
+        }))
+        return selector
+    }
+
+    private func addProfileOption(title: String, value: String, to selector: NSPopUpButton) {
+        let item = NSMenuItem(title: title, action: nil, keyEquivalent: "")
+        item.representedObject = value
+        selector.menu?.addItem(item)
+    }
+
+    private func applyMarketSelection(
+        _ selector: NSPopUpButton,
+        to profile: inout WallpaperDisplayProfile
+    ) {
+        let value = selector.selectedItem?.representedObject as? String ?? "inherit"
+        switch value {
+        case "inherit":
+            profile.marketMode = .inherit
+            profile.marketCode = nil
+        case "automatic":
+            profile.marketMode = .automatic
+            profile.marketCode = nil
+        default:
+            profile.marketMode = .explicit
+            profile.marketCode = BingMarketOption.supportedCodes.contains(value) ? value : nil
+        }
     }
 
     private func promptToApproveLoginItem() {

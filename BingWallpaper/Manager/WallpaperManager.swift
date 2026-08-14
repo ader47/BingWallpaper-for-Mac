@@ -44,23 +44,28 @@ class WallpaperManager {
         )
     }
 
+    @MainActor
     @objc func activeWorkspaceDidChange() {
         updateWallpaperIfNeeded()
     }
 
+    @MainActor
     @objc func workspaceDidWake() {
         updateWallpaperIfNeeded()
     }
 
+    @MainActor
     @objc func screenParametersDidChange() {
         updateWallpaperIfNeeded()
     }
     
+    @MainActor
     func setWallpaper(descriptor: ImageDescriptor) {
         imageDescriptor = descriptor
         updateWallpaperIfNeeded()
     }
 
+    @MainActor
     func refreshWallpaper() {
         updateWallpaperIfNeeded()
     }
@@ -112,24 +117,60 @@ class WallpaperManager {
 
         return currentURL.absoluteURL == desiredURL.absoluteURL
     }
-    
+
+    @MainActor
+    static func currentWallpaperIdentifier(forDisplayIdentifier identifier: String) -> String? {
+        guard let screen = NSScreen.screens.first(where: { displayIdentifier(for: $0) == identifier }),
+              let currentURL = NSWorkspace.shared.desktopImageURL(for: screen) else {
+            return nil
+        }
+        return Database.instance.allImageDescriptors().first(where: {
+            wallpaperURL(currentURL, matches: $0.image.downloadPath)
+        })?.wallpaperIdentifier
+    }
+
+    @MainActor
     private func updateWallpaperIfNeeded() {
-        guard let descriptor = imageDescriptor else { return }
-        let imageUrl = descriptor.image.downloadPath
+        guard imageDescriptor != nil else { return }
         let workspace = NSWorkspace.shared
         let mode = settings.wallpaperDisplayMode
         let selectedDisplayIDs = settings.selectedWallpaperDisplayIDs
+        let downloadedDescriptors = Database.instance.allImageDescriptors()
+            .filter { $0.image.isOnDisk() }
+        var profiles = settings.wallpaperDisplayProfiles
+        var profilesDidChange = false
         
         FileHandler.withWallpaperDirectoryAccess { _ in
             for screen in NSScreen.screens {
+                let displayIdentifier = Self.displayIdentifier(for: screen)
                 guard Self.shouldApplyWallpaper(
-                    toDisplayIdentifier: Self.displayIdentifier(for: screen),
+                    toDisplayIdentifier: displayIdentifier,
                     isMainDisplay: Self.displayID(for: screen) == CGMainDisplayID(),
                     mode: mode,
                     selectedDisplayIDs: selectedDisplayIDs
                 ) else {
                     continue
                 }
+
+                var profile = displayIdentifier.flatMap { profiles[$0] }
+                    ?? WallpaperDisplayProfile()
+                guard let descriptor = desiredDescriptor(
+                    for: &profile,
+                    from: downloadedDescriptors
+                ) else {
+                    continue
+                }
+                if let displayIdentifier {
+                    if profile.isDefault {
+                        if profiles.removeValue(forKey: displayIdentifier) != nil {
+                            profilesDidChange = true
+                        }
+                    } else if profiles[displayIdentifier] != profile {
+                        profiles[displayIdentifier] = profile
+                        profilesDidChange = true
+                    }
+                }
+                let imageUrl = descriptor.image.downloadPath
 
                 guard !Self.wallpaperURL(workspace.desktopImageURL(for: screen), matches: imageUrl) else {
                     continue
@@ -142,6 +183,46 @@ class WallpaperManager {
                 }
             }
         }
+        if profilesDidChange {
+            settings.wallpaperDisplayProfiles = profiles
+        }
+    }
+
+    private func desiredDescriptor(
+        for profile: inout WallpaperDisplayProfile,
+        from downloadedDescriptors: [ImageDescriptor]
+    ) -> ImageDescriptor? {
+        if profile.pinMode == .inherit,
+           settings.pinnedWallpaperID != nil {
+            return imageDescriptor
+        }
+
+        let effectiveMarketCode = profile.effectiveMarketCode(
+            globalMarketCode: settings.bingMarketCode
+        )
+        if profile.pinMode == .pinned {
+            if let pinnedWallpaperID = profile.pinnedWallpaperID,
+               let pinnedDescriptor = downloadedDescriptors.first(where: {
+                   $0.wallpaperIdentifier == pinnedWallpaperID
+               }) {
+                return pinnedDescriptor
+            }
+
+            let newestDescriptor = downloadedDescriptors
+                .filter { $0.marketCode == effectiveMarketCode }
+                .max()
+            profile.pinnedWallpaperID = newestDescriptor?.wallpaperIdentifier
+            return newestDescriptor
+        }
+
+        if profile.marketMode == .inherit,
+           profile.pinMode == .inherit {
+            return imageDescriptor
+        }
+
+        return downloadedDescriptors
+            .filter { $0.marketCode == effectiveMarketCode }
+            .max()
     }
 
     private static func displayID(for screen: NSScreen) -> CGDirectDisplayID? {

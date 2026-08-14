@@ -59,6 +59,44 @@ enum WallpaperDisplayMode: String, CaseIterable {
     }
 }
 
+enum WallpaperDisplayMarketMode: String, Codable, CaseIterable {
+    case inherit
+    case automatic
+    case explicit
+}
+
+enum WallpaperDisplayPinMode: String, Codable, CaseIterable {
+    case inherit
+    case followLatest
+    case pinned
+}
+
+struct WallpaperDisplayProfile: Codable, Equatable {
+    var marketMode: WallpaperDisplayMarketMode = .inherit
+    var marketCode: String?
+    var pinMode: WallpaperDisplayPinMode = .inherit
+    var pinnedWallpaperID: String?
+
+    var isDefault: Bool {
+        return marketMode == .inherit && pinMode == .inherit
+    }
+
+    func effectiveMarketCode(globalMarketCode: String?) -> String? {
+        switch marketMode {
+        case .inherit:
+            return globalMarketCode
+        case .automatic:
+            return nil
+        case .explicit:
+            guard let marketCode,
+                  BingMarketOption.supportedCodes.contains(marketCode) else {
+                return globalMarketCode
+            }
+            return marketCode
+        }
+    }
+}
+
 public class Settings {
     private let defaults: UserDefaults
 
@@ -232,6 +270,39 @@ public class Settings {
             }
         }
     }
+
+    var wallpaperDisplayProfiles: [String: WallpaperDisplayProfile] {
+        get {
+            guard let data = defaults.data(forKey: Settings.WALLPAPER_DISPLAY_PROFILES),
+                  let profiles = try? JSONDecoder().decode(
+                    [String: WallpaperDisplayProfile].self,
+                    from: data
+                  ) else {
+                return [:]
+            }
+            return profiles
+        }
+        set {
+            let profiles = newValue.filter { $0.value.isDefault == false }
+            guard profiles.isEmpty == false,
+                  let data = try? JSONEncoder().encode(profiles) else {
+                defaults.removeObject(forKey: Settings.WALLPAPER_DISPLAY_PROFILES)
+                return
+            }
+            defaults.set(data, forKey: Settings.WALLPAPER_DISPLAY_PROFILES)
+        }
+    }
+
+    var requiredBingMarketCodes: [String?] {
+        var result = [bingMarketCode]
+        for profile in wallpaperDisplayProfiles.values where profile.marketMode != .inherit {
+            let marketCode = profile.effectiveMarketCode(globalMarketCode: bingMarketCode)
+            if result.contains(where: { $0 == marketCode }) == false {
+                result.append(marketCode)
+            }
+        }
+        return result
+    }
     
     public var lastUpdate: Date {
         get {
@@ -302,6 +373,7 @@ public class Settings {
     private static let SELECTED_WALLPAPER_DISPLAY_IDS = "SELECTED_WALLPAPER_DISPLAY_IDS"
     private static let FAVORITE_WALLPAPER_IDS = "FAVORITE_WALLPAPER_IDS"
     private static let PINNED_WALLPAPER_ID = "PINNED_WALLPAPER_ID"
+    private static let WALLPAPER_DISPLAY_PROFILES = "WALLPAPER_DISPLAY_PROFILES"
     private static let LAST_UPDATE = "LAST_UPDATE"
     private static let KEEP_IMAGE_DURATION = "KEEP_IMAGE_DURATION"
 }

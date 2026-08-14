@@ -29,3 +29,8 @@ reveal the downloaded file in Finder, or save a copy elsewhere.
 Wallpapers can also be pinned or added to Favorites. A pinned wallpaper is not
 replaced by scheduled downloads, while favorites remain available from the
 main menu and are protected from automatic retention cleanup.
+
+Connected displays can have independent profiles. Each profile may inherit the
+global settings or choose its own Bing region, and can inherit the global pin,
+follow the latest image, or pin that display's current wallpaper. Profiles use
+stable display identifiers and remain saved while a display is disconnected.
