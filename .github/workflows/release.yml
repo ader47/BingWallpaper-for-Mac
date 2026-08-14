@@ -29,42 +29,83 @@ jobs:
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           echo "Building version $VERSION (build ${GITHUB_RUN_NUMBER})"
 
-      # Ad-hoc signing preserves the sandbox/bookmark entitlements. A public
-      # release should replace this with Developer ID signing and notarization.
-      - name: Build (Release, ad-hoc signed)
+      - name: Import Developer ID certificates
+        env:
+          APPLICATION_CERTIFICATE: ${{ secrets.DEVELOPER_ID_APPLICATION_P12_BASE64 }}
+          APPLICATION_CERTIFICATE_PASSWORD: ${{ secrets.DEVELOPER_ID_APPLICATION_PASSWORD }}
+          INSTALLER_CERTIFICATE: ${{ secrets.DEVELOPER_ID_INSTALLER_P12_BASE64 }}
+          INSTALLER_CERTIFICATE_PASSWORD: ${{ secrets.DEVELOPER_ID_INSTALLER_PASSWORD }}
+        run: |
+          set -euo pipefail
+          KEYCHAIN_PATH="$RUNNER_TEMP/bing-wallpaper-signing.keychain-db"
+          KEYCHAIN_PASSWORD="$(uuidgen)"
+          echo "$APPLICATION_CERTIFICATE" | base64 --decode > "$RUNNER_TEMP/application.p12"
+          echo "$INSTALLER_CERTIFICATE" | base64 --decode > "$RUNNER_TEMP/installer.p12"
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security import "$RUNNER_TEMP/application.p12" -P "$APPLICATION_CERTIFICATE_PASSWORD" -A -t cert -f pkcs12 -k "$KEYCHAIN_PATH"
+          security import "$RUNNER_TEMP/installer.p12" -P "$INSTALLER_CERTIFICATE_PASSWORD" -A -t cert -f pkcs12 -k "$KEYCHAIN_PATH"
+          security set-key-partition-list -S apple-tool:,apple: -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security list-keychains -d user -s "$KEYCHAIN_PATH" login.keychain-db
+
+      - name: Build (Release, Developer ID signed)
         env:
           VERSION: ${{ steps.version.outputs.version }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPLICATION_IDENTITY: ${{ secrets.DEVELOPER_ID_APPLICATION_IDENTITY }}
         run: |
           set -euo pipefail
           xcodebuild clean build \
             -project BingWallpaper.xcodeproj \
             -target BingWallpaper \
             -configuration Release \
-            CODE_SIGN_IDENTITY="-" \
+            CODE_SIGN_IDENTITY="$APPLICATION_IDENTITY" \
             CODE_SIGN_STYLE=Manual \
             CODE_SIGN_INJECT_BASE_ENTITLEMENTS=NO \
-            DEVELOPMENT_TEAM="" \
+            DEVELOPMENT_TEAM="$APPLE_TEAM_ID" \
             MARKETING_VERSION="$VERSION" \
             CURRENT_PROJECT_VERSION="${GITHUB_RUN_NUMBER}"
 
-      - name: Create .zip and .pkg
+      - name: Create, notarize, and staple release artifacts
         env:
           VERSION: ${{ steps.version.outputs.version }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          INSTALLER_IDENTITY: ${{ secrets.DEVELOPER_ID_INSTALLER_IDENTITY }}
         run: |
           set -euo pipefail
-          cd ./build/Release/
+          APP_PATH="build/Release/BingWallpaper.app"
+          ZIP_PATH="BingWallpaper_${VERSION}.zip"
+          PKG_PATH="BingWallpaper_${VERSION}.pkg"
 
-          # ZIP
-          zip -r "../../BingWallpaper_${VERSION}.zip" ./BingWallpaper.app
+          codesign --verify --deep --strict --verbose=2 "$APP_PATH"
+          ditto -c -k --keepParent "$APP_PATH" "$ZIP_PATH"
+          xcrun notarytool submit "$ZIP_PATH" \
+            --apple-id "$APPLE_ID" \
+            --password "$APPLE_APP_SPECIFIC_PASSWORD" \
+            --team-id "$APPLE_TEAM_ID" \
+            --wait
+          xcrun stapler staple "$APP_PATH"
+          xcrun stapler validate "$APP_PATH"
+          ditto -c -k --keepParent "$APP_PATH" "$ZIP_PATH"
 
-          # PKG (uses preinstall/postinstall from ReleaseUtils)
-          pkgbuild --component BingWallpaper.app \
-                   --scripts ../../ReleaseUtils/ \
+          pkgbuild --component "$APP_PATH" \
+                   --scripts ReleaseUtils/ \
                    --install-location /Applications \
-                   "../../BingWallpaper_${VERSION}.pkg"
-
-          cd ../../
-          shasum -a 256 "BingWallpaper_${VERSION}.pkg" > "BingWallpaper_${VERSION}.pkg.sha256"
+                   --sign "$INSTALLER_IDENTITY" \
+                   "$PKG_PATH"
+          xcrun notarytool submit "$PKG_PATH" \
+            --apple-id "$APPLE_ID" \
+            --password "$APPLE_APP_SPECIFIC_PASSWORD" \
+            --team-id "$APPLE_TEAM_ID" \
+            --wait
+          xcrun stapler staple "$PKG_PATH"
+          xcrun stapler validate "$PKG_PATH"
+          spctl --assess --type execute --verbose=2 "$APP_PATH"
+          spctl --assess --type install --verbose=2 "$PKG_PATH"
+          shasum -a 256 "$PKG_PATH" > "$PKG_PATH.sha256"
 
       - name: Publish GitHub Release
         env:
@@ -78,3 +119,9 @@ jobs:
             "BingWallpaper_${VERSION}.zip" \
             "BingWallpaper_${VERSION}.pkg" \
             "BingWallpaper_${VERSION}.pkg.sha256"
+
+      - name: Remove temporary signing keychain
+        if: always()
+        run: |
+          security delete-keychain "$RUNNER_TEMP/bing-wallpaper-signing.keychain-db" || true
+          rm -f "$RUNNER_TEMP/application.p12" "$RUNNER_TEMP/installer.p12"
