@@ -585,6 +585,11 @@ final class MenuController: NSObject {
             return
         }
 
+        showWallpaper(forMenuDisplayIdentifier: activeDisplayIdentifier)
+    }
+
+    private func showWallpaper(forMenuDisplayIdentifier activeDisplayIdentifier: String) {
+
         let downloadedDescriptors = Database.instance.allImageDescriptors()
             .filter { $0.image.isOnDisk() }
         let profile = settings.wallpaperDisplayProfiles[activeDisplayIdentifier]
@@ -639,7 +644,12 @@ final class MenuController: NSObject {
 
 extension MenuController: UpdateManagerDelegate {
     func wallpaperLibraryDidChange(forceWallpaperRefresh: Bool) {
-        showNewestImage()
+        if let activeDisplayIdentifier {
+            showWallpaper(forMenuDisplayIdentifier: activeDisplayIdentifier)
+            updateImageSelectorView(newSelectedDescriptorIndex: selectedDescriptorIndex)
+        } else {
+            showNewestImage()
+        }
         if forceWallpaperRefresh {
             WallpaperManager.shared.refreshWallpaper(force: true)
         }
