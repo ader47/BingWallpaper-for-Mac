@@ -66,7 +66,15 @@ class Database {
         imageEntries
             .filter { imageEntry in preservedStartDates.contains(imageEntry.startdate) == false }
             .forEach { image in
-                _ = ImageDescriptor.instantiate(from: image, marketCode: marketCode, in: managedContext)
+                do {
+                    _ = try ImageDescriptor.instantiate(
+                        from: image,
+                        marketCode: marketCode,
+                        in: managedContext
+                    )
+                } catch {
+                    logger.error("Skipping invalid Bing wallpaper metadata: \(error.localizedDescription, privacy: .public)")
+                }
             }
         
         do {

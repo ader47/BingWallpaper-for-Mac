@@ -85,6 +85,57 @@ final class DownloadValidationTests: XCTestCase {
     }
 }
 
+final class BingMetadataValidationTests: XCTestCase {
+    func testAcceptsValidBingMetadataAndBuildsUHDURL() throws {
+        let metadata = try ImageDescriptor.validatedMetadata(from: validEntry())
+
+        XCTAssertEqual(metadata.startDate, "20250102")
+        XCTAssertEqual(metadata.endDate, "20250103")
+        XCTAssertEqual(metadata.imageURL.scheme, "https")
+        XCTAssertEqual(metadata.imageURL.host, "www.bing.com")
+        XCTAssertTrue(metadata.imageURL.absoluteString.contains("UHD"))
+    }
+
+    func testRejectsInvalidOrImpossibleDates() {
+        XCTAssertThrowsError(try ImageDescriptor.validatedMetadata(
+            from: validEntry(startDate: "../../x")
+        ))
+        XCTAssertThrowsError(try ImageDescriptor.validatedMetadata(
+            from: validEntry(startDate: "20250231")
+        ))
+    }
+
+    func testRejectsUntrustedImageAndCopyrightURLs() {
+        XCTAssertThrowsError(try ImageDescriptor.validatedMetadata(
+            from: validEntry(imageURL: "//example.com/wallpaper.jpg")
+        ))
+        XCTAssertThrowsError(try ImageDescriptor.validatedMetadata(
+            from: validEntry(copyrightURL: "https://example.com/details")
+        ))
+    }
+
+    func testMalformedPersistedValuesCannotCreateNestedFilePaths() {
+        let fileName = Image.fileName(startDate: "../../escape", marketCode: "../bad")
+
+        XCTAssertEqual(URL(fileURLWithPath: fileName).lastPathComponent, fileName)
+        XCTAssertFalse(fileName.contains("/"))
+    }
+
+    private func validEntry(
+        startDate: String = "20250102",
+        imageURL: String = "/th?id=OHR.Example_1920x1080.jpg",
+        copyrightURL: String = "https://www.bing.com/search?q=example"
+    ) -> DownloadManager.ImageEntry {
+        return DownloadManager.ImageEntry(
+            url: imageURL,
+            enddate: "20250103",
+            startdate: startDate,
+            copyright: "Example (© Photographer)",
+            copyrightlink: copyrightURL
+        )
+    }
+}
+
 final class ImageDirectorySettingsTests: XCTestCase {
     func testSecurityScopedBookmarkRoundTrip() throws {
         let suiteName = "BingWallpaperTests.\(UUID().uuidString)"

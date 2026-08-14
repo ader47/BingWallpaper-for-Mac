@@ -21,14 +21,34 @@ class Image {
     
     init(descriptor: ImageDescriptor) {
         self.descriptor = descriptor
-        let fileName: String
-        if let marketCode = descriptor.marketCode {
-            fileName = marketCode + "_" + descriptor.startDate + ".jpg"
-        } else {
+        self.fileName = Self.fileName(
+            startDate: descriptor.startDate,
+            marketCode: descriptor.marketCode
+        )
+    }
+
+    static func fileName(startDate: String, marketCode: String?) -> String {
+        let safeDate = safeFileNameComponent(startDate, expectedDate: true)
+        guard let marketCode else {
             // Keep the legacy name for automatic/network-location images.
-            fileName = descriptor.startDate + ".jpg"
+            return safeDate + ".jpg"
         }
-        self.fileName = fileName
+        let safeMarket = safeFileNameComponent(marketCode, expectedDate: false)
+        return safeMarket + "_" + safeDate + ".jpg"
+    }
+
+    private static func safeFileNameComponent(_ value: String, expectedDate: Bool) -> String {
+        let isExpectedValue = expectedDate
+            ? ImageDescriptor.isValidBingDate(value)
+            : BingMarketOption.supportedCodes.contains(value)
+        guard isExpectedValue else {
+            let encodedValue = value.utf8
+                .prefix(64)
+                .map { String(format: "%02x", $0) }
+                .joined()
+            return "invalid-" + (encodedValue.isEmpty ? "empty" : encodedValue)
+        }
+        return value
     }
     
     func loadFromDisk() async throws -> Data {

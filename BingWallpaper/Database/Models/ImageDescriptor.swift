@@ -72,6 +72,33 @@ struct WallpaperImageInfo: Equatable {
 }
 
 public final class ImageDescriptor: NSManagedObject {
+    enum ValidationError: LocalizedError, Equatable {
+        case invalidStartDate(String)
+        case invalidEndDate(String)
+        case invalidImageURL(String)
+        case invalidCopyrightURL(String)
+
+        var errorDescription: String? {
+            switch self {
+            case .invalidStartDate(let value):
+                return "Invalid Bing start date: \(value)"
+            case .invalidEndDate(let value):
+                return "Invalid Bing end date: \(value)"
+            case .invalidImageURL(let value):
+                return "Invalid Bing image URL: \(value)"
+            case .invalidCopyrightURL(let value):
+                return "Invalid Bing copyright URL: \(value)"
+            }
+        }
+    }
+
+    struct ValidatedMetadata {
+        let startDate: String
+        let endDate: String
+        let imageURL: URL
+        let copyrightURL: URL
+    }
+
     @NSManaged var startDate: String
     @NSManaged var endDate: String
     @NSManaged var imageUrl: URL
@@ -102,16 +129,78 @@ public final class ImageDescriptor: NSManagedObject {
         return lhs.startDate == rhs.startDate && lhs.marketCode == rhs.marketCode
     }
     
-    static func instantiate(from entry: DownloadManager.ImageEntry, marketCode: String?, in managedContext: NSManagedObjectContext) -> ImageDescriptor {
+    static func instantiate(
+        from entry: DownloadManager.ImageEntry,
+        marketCode: String?,
+        in managedContext: NSManagedObjectContext
+    ) throws -> ImageDescriptor {
+        let metadata = try validatedMetadata(from: entry)
         let entity = NSEntityDescription.entity(forEntityName: "ImageDescriptor", in: managedContext)!
         let imageDescriptor = ImageDescriptor(entity: entity, insertInto: managedContext)
-        imageDescriptor.startDate = entry.startdate
-        imageDescriptor.endDate = entry.enddate
-        imageDescriptor.imageUrl = URL(string: "https://www.bing.com" + entry.url.replacingOccurrences(of: "1920x1080", with: "UHD"))!
+        imageDescriptor.startDate = metadata.startDate
+        imageDescriptor.endDate = metadata.endDate
+        imageDescriptor.imageUrl = metadata.imageURL
         imageDescriptor.descriptionString = entry.copyright
-        imageDescriptor.copyrightUrl = URL(string: entry.copyrightlink)!
+        imageDescriptor.copyrightUrl = metadata.copyrightURL
         imageDescriptor.marketCode = marketCode
         return imageDescriptor
+    }
+
+    static func validatedMetadata(from entry: DownloadManager.ImageEntry) throws -> ValidatedMetadata {
+        guard isValidBingDate(entry.startdate) else {
+            throw ValidationError.invalidStartDate(entry.startdate)
+        }
+        guard isValidBingDate(entry.enddate) else {
+            throw ValidationError.invalidEndDate(entry.enddate)
+        }
+
+        let bingBaseURL = URL(string: "https://www.bing.com")!
+        let imagePath = entry.url.replacingOccurrences(of: "1920x1080", with: "UHD")
+        guard let imageURL = URL(string: imagePath, relativeTo: bingBaseURL)?.absoluteURL,
+              isTrustedBingURL(imageURL) else {
+            throw ValidationError.invalidImageURL(entry.url)
+        }
+        guard let copyrightURL = URL(string: entry.copyrightlink, relativeTo: bingBaseURL)?.absoluteURL,
+              isTrustedBingURL(copyrightURL) else {
+            throw ValidationError.invalidCopyrightURL(entry.copyrightlink)
+        }
+
+        return ValidatedMetadata(
+            startDate: entry.startdate,
+            endDate: entry.enddate,
+            imageURL: imageURL,
+            copyrightURL: copyrightURL
+        )
+    }
+
+    static func isValidBingDate(_ value: String) -> Bool {
+        guard value.utf8.count == 8,
+              value.utf8.allSatisfy({ (48...57).contains($0) }) else {
+            return false
+        }
+
+        guard let year = Int(value.prefix(4)) else { return false }
+        let monthStart = value.index(value.startIndex, offsetBy: 4)
+        let dayStart = value.index(value.startIndex, offsetBy: 6)
+        guard let month = Int(value[monthStart..<dayStart]),
+              let day = Int(value[dayStart...]) else {
+            return false
+        }
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(secondsFromGMT: 0)!
+        guard let date = calendar.date(from: DateComponents(year: year, month: month, day: day)) else {
+            return false
+        }
+        let components = calendar.dateComponents([.year, .month, .day], from: date)
+        return components.year == year && components.month == month && components.day == day
+    }
+
+    private static func isTrustedBingURL(_ url: URL) -> Bool {
+        guard url.scheme?.lowercased() == "https",
+              let host = url.host?.lowercased() else {
+            return false
+        }
+        return host == "bing.com" || host.hasSuffix(".bing.com")
     }
 }
 
