@@ -62,6 +62,9 @@ class MenuController: NSObject {
         imageSelectorView.leftButton.target = self
         imageSelectorView.rightButton.action = #selector(MenuController.imageSelectorViewRightButtonAction)
         imageSelectorView.rightButton.target = self
+        imageSelectorView.imageClickAction = { [weak self] in
+            self?.openImageSource(nil)
+        }
         imageItem.view = imageSelectorView
         imageItem.tag = MenuController.IMAGE_VIEW_TAG
         menu.addItem(imageItem)
