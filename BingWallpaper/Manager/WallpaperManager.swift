@@ -46,28 +46,28 @@ class WallpaperManager {
 
     @MainActor
     @objc func activeWorkspaceDidChange() {
-        updateWallpaperIfNeeded()
+        updateWallpaperIfNeeded(forceRefresh: false)
     }
 
     @MainActor
     @objc func workspaceDidWake() {
-        updateWallpaperIfNeeded()
+        updateWallpaperIfNeeded(forceRefresh: false)
     }
 
     @MainActor
     @objc func screenParametersDidChange() {
-        updateWallpaperIfNeeded()
+        updateWallpaperIfNeeded(forceRefresh: false)
     }
     
     @MainActor
     func setWallpaper(descriptor: ImageDescriptor) {
         imageDescriptor = descriptor
-        updateWallpaperIfNeeded()
+        updateWallpaperIfNeeded(forceRefresh: false)
     }
 
     @MainActor
-    func refreshWallpaper() {
-        updateWallpaperIfNeeded()
+    func refreshWallpaper(force: Bool = false) {
+        updateWallpaperIfNeeded(forceRefresh: force)
     }
 
     static func connectedDisplays() -> [WallpaperDisplayInfo] {
@@ -130,7 +130,7 @@ class WallpaperManager {
     }
 
     @MainActor
-    private func updateWallpaperIfNeeded() {
+    private func updateWallpaperIfNeeded(forceRefresh: Bool) {
         guard imageDescriptor != nil else { return }
         let workspace = NSWorkspace.shared
         let mode = settings.wallpaperDisplayMode
@@ -172,7 +172,8 @@ class WallpaperManager {
                 }
                 let imageUrl = descriptor.image.downloadPath
 
-                guard !Self.wallpaperURL(workspace.desktopImageURL(for: screen), matches: imageUrl) else {
+                guard forceRefresh ||
+                    !Self.wallpaperURL(workspace.desktopImageURL(for: screen), matches: imageUrl) else {
                     continue
                 }
 

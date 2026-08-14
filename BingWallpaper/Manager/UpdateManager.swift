@@ -59,7 +59,7 @@ struct WallpaperUpdateStatus: Equatable {
 
 protocol UpdateManagerDelegate: AnyObject {
     @MainActor
-    func wallpaperLibraryDidChange()
+    func wallpaperLibraryDidChange(forceWallpaperRefresh: Bool)
     @MainActor
     func updateStatusDidChange(_ status: WallpaperUpdateStatus)
 }
@@ -214,6 +214,7 @@ final class UpdateManager: @unchecked Sendable {
         Task { [weak self] in
             var imageFailureRequiringRetry: Error?
             var downloadedAnImage = false
+            var replacedExistingImage = false
 
             for marketCode in marketCodes {
                 let imageEntries: [DownloadManager.ImageEntry]
@@ -226,14 +227,14 @@ final class UpdateManager: @unchecked Sendable {
                     logger.error("Failed to download image entries for market \(marketCode ?? "automatic", privacy: .public) with error: \(error.localizedDescription, privacy: .public)")
                     await MainActor.run { [weak self] in
                         if downloadedAnImage {
-                            self?.delegate?.wallpaperLibraryDidChange()
+                            self?.delegate?.wallpaperLibraryDidChange(forceWallpaperRefresh: replacedExistingImage)
                         }
                         self?.finishUpdateWithFailure(stage: .metadata, error: error)
                     }
                     return
                 }
 
-                let descriptors = Database.instance.updateImageDescriptors(
+                let descriptorUpdate = Database.instance.updateImageDescriptors(
                     from: imageEntries,
                     marketCode: marketCode
                 )
@@ -241,13 +242,19 @@ final class UpdateManager: @unchecked Sendable {
                     .allImageDescriptors(marketCode: marketCode)
                     .contains { $0.image.isOnDisk() }
                 var marketErrors = [Error]()
-                let missingDescriptors = descriptors
-                    .filter { $0.image.isOnDisk() == false }
+                let missingDescriptors = descriptorUpdate.descriptors
+                    .filter {
+                        descriptorUpdate.wallpaperIDsRequiringDownload.contains($0.wallpaperIdentifier) ||
+                            $0.image.isOnDisk() == false
+                    }
 
                 for descriptor in missingDescriptors {
+                    let replacesExistingImage = descriptorUpdate.wallpaperIDsRequiringDownload
+                        .contains(descriptor.wallpaperIdentifier)
                     do {
                         try await descriptor.image.downloadAndSaveToDisk()
                         downloadedAnImage = true
+                        replacedExistingImage = replacedExistingImage || replacesExistingImage
                         marketHasAvailableImage = true
                     } catch {
                         marketErrors.append(error)
@@ -272,7 +279,7 @@ final class UpdateManager: @unchecked Sendable {
                 // Metadata may have been recreated while the image files were
                 // already on disk (for example after Reset Database), so the UI
                 // must refresh even when no download occurred.
-                self.delegate?.wallpaperLibraryDidChange()
+                self.delegate?.wallpaperLibraryDidChange(forceWallpaperRefresh: replacedExistingImage)
                 if let imageFailureRequiringRetry {
                     self.finishUpdateWithFailure(
                         stage: .images,

@@ -522,8 +522,11 @@ class MenuController: NSObject {
 // MARK: - Delegates
 
 extension MenuController: UpdateManagerDelegate {
-    func wallpaperLibraryDidChange() {
+    func wallpaperLibraryDidChange(forceWallpaperRefresh: Bool) {
         showNewestImage()
+        if forceWallpaperRefresh {
+            WallpaperManager.shared.refreshWallpaper(force: true)
+        }
     }
 
     func updateStatusDidChange(_ status: WallpaperUpdateStatus) {

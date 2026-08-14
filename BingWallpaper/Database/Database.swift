@@ -15,6 +15,11 @@ private let logger = Logger(
 )
 
 class Database {
+    struct ImageDescriptorUpdate {
+        let descriptors: [ImageDescriptor]
+        let wallpaperIDsRequiringDownload: Set<String>
+    }
+
     static let instance = Database()
     
     private init() { }
@@ -65,25 +70,36 @@ class Database {
     }
     
     @MainActor
-    func updateImageDescriptors(from imageEntries: [DownloadManager.ImageEntry], marketCode: String?) -> [ImageDescriptor] {
+    func updateImageDescriptors(
+        from imageEntries: [DownloadManager.ImageEntry],
+        marketCode: String?
+    ) -> ImageDescriptorUpdate {
         let managedContext = persistentContainer.viewContext
         let requestedStartDates = Set(imageEntries.map { $0.startdate })
-        let preservedStartDates = allImageDescriptors(marketCode: marketCode)
-            .map { $0.startDate }
+        var descriptorByStartDate = allImageDescriptors(marketCode: marketCode)
+            .reduce(into: [String: ImageDescriptor]()) { descriptors, descriptor in
+                descriptors[descriptor.startDate] = descriptor
+            }
+        var wallpaperIDsRequiringDownload = Set<String>()
         
-        imageEntries
-            .filter { imageEntry in preservedStartDates.contains(imageEntry.startdate) == false }
-            .forEach { image in
-                do {
-                    _ = try ImageDescriptor.instantiate(
+        for image in imageEntries {
+            do {
+                if let existingDescriptor = descriptorByStartDate[image.startdate] {
+                    if try existingDescriptor.update(from: image) {
+                        wallpaperIDsRequiringDownload.insert(existingDescriptor.wallpaperIdentifier)
+                    }
+                } else {
+                    let descriptor = try ImageDescriptor.instantiate(
                         from: image,
                         marketCode: marketCode,
                         in: managedContext
                     )
-                } catch {
-                    logger.error("Skipping invalid Bing wallpaper metadata: \(error.localizedDescription, privacy: .public)")
+                    descriptorByStartDate[descriptor.startDate] = descriptor
                 }
+            } catch {
+                logger.error("Skipping invalid Bing wallpaper metadata: \(error.localizedDescription, privacy: .public)")
             }
+        }
         
         do {
             try managedContext.save()
@@ -94,8 +110,12 @@ class Database {
         // Retry missing files while they are still part of Bing's current
         // archive response. Historical descriptors must not keep an otherwise
         // healthy update in a permanent retry loop when their remote URL expires.
-        return allImageDescriptors(marketCode: marketCode)
+        let currentDescriptors = allImageDescriptors(marketCode: marketCode)
             .filter { requestedStartDates.contains($0.startDate) }
+        return ImageDescriptorUpdate(
+            descriptors: currentDescriptors,
+            wallpaperIDsRequiringDownload: wallpaperIDsRequiringDownload
+        )
     }
     
     

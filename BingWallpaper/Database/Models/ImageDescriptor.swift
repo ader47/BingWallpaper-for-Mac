@@ -146,6 +146,25 @@ public final class ImageDescriptor: NSManagedObject {
         return imageDescriptor
     }
 
+    @discardableResult
+    func update(from entry: DownloadManager.ImageEntry) throws -> Bool {
+        let metadata = try Self.validatedMetadata(from: entry)
+        let imageChanged = Self.metadataRequiresImageRefresh(
+            currentImageURL: imageUrl,
+            newImageURL: metadata.imageURL
+        )
+        startDate = metadata.startDate
+        endDate = metadata.endDate
+        imageUrl = metadata.imageURL
+        descriptionString = entry.copyright
+        copyrightUrl = metadata.copyrightURL
+        return imageChanged
+    }
+
+    static func metadataRequiresImageRefresh(currentImageURL: URL, newImageURL: URL) -> Bool {
+        return currentImageURL.absoluteURL != newImageURL.absoluteURL
+    }
+
     static func validatedMetadata(from entry: DownloadManager.ImageEntry) throws -> ValidatedMetadata {
         guard isValidBingDate(entry.startdate) else {
             throw ValidationError.invalidStartDate(entry.startdate)

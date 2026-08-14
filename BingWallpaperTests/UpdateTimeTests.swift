@@ -144,6 +144,20 @@ final class BingMetadataValidationTests: XCTestCase {
         XCTAssertFalse(fileName.contains("/"))
     }
 
+    func testChangedAutomaticRegionImageRequiresSameDayRefresh() {
+        let previousURL = URL(string: "https://www.bing.com/th?id=OHR.RegionA_UHD.jpg")!
+        let newURL = URL(string: "https://www.bing.com/th?id=OHR.RegionB_UHD.jpg")!
+
+        XCTAssertTrue(ImageDescriptor.metadataRequiresImageRefresh(
+            currentImageURL: previousURL,
+            newImageURL: newURL
+        ))
+        XCTAssertFalse(ImageDescriptor.metadataRequiresImageRefresh(
+            currentImageURL: previousURL,
+            newImageURL: previousURL
+        ))
+    }
+
     private func validEntry(
         startDate: String = "20250102",
         imageURL: String = "/th?id=OHR.Example_1920x1080.jpg",
