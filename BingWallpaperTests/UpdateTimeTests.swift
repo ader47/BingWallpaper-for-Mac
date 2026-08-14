@@ -342,6 +342,7 @@ final class UpdateStatusTests: XCTestCase {
         XCTAssertEqual(UpdateManager.retryInterval(forFailureCount: 20), 30 * 60)
     }
 
+    @MainActor
     func testManagerInitialStatusUsesPersistedLastSuccess() {
         let suiteName = "BingWallpaperTests.\(UUID().uuidString)"
         let defaults = UserDefaults(suiteName: suiteName)!

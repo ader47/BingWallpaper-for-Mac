@@ -51,10 +51,12 @@ class Image {
         return value
     }
     
+    @MainActor
     func loadFromDisk() async throws -> Data {
         return try FileHandler.loadImageDataFromDisk(at: downloadPath)
     }
     
+    @MainActor
     func downloadAndSaveToDisk() async throws {
         guard let descriptor else {
             throw Error.missingDescriptor

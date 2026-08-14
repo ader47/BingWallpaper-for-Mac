@@ -1,7 +1,8 @@
 import Cocoa
 
 @main
-class AppDelegate: NSObject, NSApplicationDelegate {
+@MainActor
+final class AppDelegate: NSObject, NSApplicationDelegate {
     private let menuController = MenuController()
     
     func applicationDidFinishLaunching(_ aNotification: Notification) {

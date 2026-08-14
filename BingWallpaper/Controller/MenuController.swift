@@ -7,7 +7,8 @@ private let logger = Logger(
     category: Logging.Category.Menu.rawValue
 )
 
-class MenuController: NSObject {
+@MainActor
+final class MenuController: NSObject {
     private var statusItem: NSStatusItem?
     private var menu: NSMenu?
     private let settings = Settings()

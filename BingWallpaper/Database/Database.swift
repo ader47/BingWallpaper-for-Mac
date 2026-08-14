@@ -14,7 +14,8 @@ private let logger = Logger(
     category: Logging.Category.Database.rawValue
 )
 
-class Database {
+@MainActor
+final class Database {
     struct ImageDescriptorUpdate {
         let descriptors: [ImageDescriptor]
         let wallpaperIDsRequiringDownload: Set<String>

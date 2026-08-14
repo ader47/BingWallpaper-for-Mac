@@ -64,7 +64,8 @@ protocol UpdateManagerDelegate: AnyObject {
     func updateStatusDidChange(_ status: WallpaperUpdateStatus)
 }
 
-final class UpdateManager: @unchecked Sendable {
+@MainActor
+final class UpdateManager {
     private static let ACTIVITY_IDENTIFIER = "com.2h4u.BingWallpaper.update"
 
     weak var delegate: UpdateManagerDelegate?
@@ -76,8 +77,8 @@ final class UpdateManager: @unchecked Sendable {
     private var pendingUpdateRequested = false
     private(set) var status: WallpaperUpdateStatus
 
-    private static let RETRY_BASE_INTERVAL: TimeInterval = 30
-    private static let RETRY_MAX_INTERVAL: TimeInterval = 30 * 60
+    nonisolated private static let RETRY_BASE_INTERVAL: TimeInterval = 30
+    nonisolated private static let RETRY_MAX_INTERVAL: TimeInterval = 30 * 60
 
     init(settings: Settings = Settings()) {
         self.settings = settings
@@ -356,7 +357,7 @@ final class UpdateManager: @unchecked Sendable {
         ))
     }
 
-    static func retryInterval(forFailureCount failureCount: Int) -> TimeInterval {
+    nonisolated static func retryInterval(forFailureCount failureCount: Int) -> TimeInterval {
         let exponent = min(max(failureCount, 1) - 1, 10)
         return min(
             RETRY_BASE_INTERVAL * pow(2.0, Double(exponent)),
@@ -364,7 +365,7 @@ final class UpdateManager: @unchecked Sendable {
         )
     }
 
-    static func imageDownloadFailuresRequireRetry(
+    nonisolated static func imageDownloadFailuresRequireRetry(
         hasAvailableImage: Bool,
         errors: [Error]
     ) -> Bool {

@@ -14,7 +14,8 @@ struct WallpaperDisplayInfo {
     let isMain: Bool
 }
 
-class WallpaperManager {
+@MainActor
+final class WallpaperManager {
     private var imageDescriptor: ImageDescriptor?
     private let settings = Settings()
     static let shared = WallpaperManager()
@@ -90,7 +91,7 @@ class WallpaperManager {
         }
     }
 
-    static func shouldApplyWallpaper(
+    nonisolated static func shouldApplyWallpaper(
         toDisplayIdentifier identifier: String?,
         isMainDisplay: Bool,
         mode: WallpaperDisplayMode,
@@ -107,7 +108,7 @@ class WallpaperManager {
         }
     }
 
-    static func wallpaperURL(_ currentURL: URL?, matches desiredURL: URL) -> Bool {
+    nonisolated static func wallpaperURL(_ currentURL: URL?, matches desiredURL: URL) -> Bool {
         guard let currentURL else { return false }
 
         if currentURL.isFileURL && desiredURL.isFileURL {
