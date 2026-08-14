@@ -151,6 +151,9 @@ final class Database {
                     if try existingDescriptor.update(from: image) {
                         wallpaperIDsRequiringDownload.insert(existingDescriptor.wallpaperIdentifier)
                     }
+                    if existingDescriptor.requiresImageDownload {
+                        wallpaperIDsRequiringDownload.insert(existingDescriptor.wallpaperIdentifier)
+                    }
                     validMetadataCount += 1
                 } else {
                     let descriptor = try ImageDescriptor.instantiate(
@@ -198,6 +201,18 @@ final class Database {
             wallpaperIDsRequiringDownload: wallpaperIDsRequiringDownload
         )
     }
+
+    func markImageDownloadCompleted(for descriptor: ImageDescriptor) throws {
+        guard descriptor.requiresImageDownload else { return }
+        let managedContext = persistentContainer.viewContext
+        descriptor.requiresImageDownload = false
+        do {
+            try managedContext.save()
+        } catch {
+            managedContext.rollback()
+            throw error
+        }
+    }
     
     
     // MARK: - Core Data stack
@@ -237,6 +252,12 @@ final class Database {
         marketCodeAttr.name = "marketCode"
         marketCodeAttr.attributeType = .stringAttributeType
         marketCodeAttr.isOptional = true
+
+        let requiresImageDownloadAttr = NSAttributeDescription()
+        requiresImageDownloadAttr.name = "requiresImageDownload"
+        requiresImageDownloadAttr.attributeType = .booleanAttributeType
+        requiresImageDownloadAttr.isOptional = false
+        requiresImageDownloadAttr.defaultValue = false
         
         entity.properties = [
             startDateAttr,
@@ -244,7 +265,8 @@ final class Database {
             imageUrlAttr,
             descriptionStringAttr,
             copyrightUrlAttr,
-            marketCodeAttr
+            marketCodeAttr,
+            requiresImageDownloadAttr
         ]
         
         return entity

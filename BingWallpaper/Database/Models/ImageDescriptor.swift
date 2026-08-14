@@ -108,6 +108,7 @@ public final class ImageDescriptor: NSManagedObject {
     @NSManaged var descriptionString: String
     @NSManaged var copyrightUrl: URL
     @NSManaged var marketCode: String?
+    @NSManaged var requiresImageDownload: Bool
     lazy var image: Image = {
         return Image(descriptor: self)
     }()
@@ -151,6 +152,7 @@ public final class ImageDescriptor: NSManagedObject {
         imageDescriptor.descriptionString = entry.copyright
         imageDescriptor.copyrightUrl = metadata.copyrightURL
         imageDescriptor.marketCode = marketCode
+        imageDescriptor.requiresImageDownload = true
         return imageDescriptor
     }
 
@@ -166,6 +168,9 @@ public final class ImageDescriptor: NSManagedObject {
         imageUrl = metadata.imageURL
         descriptionString = entry.copyright
         copyrightUrl = metadata.copyrightURL
+        if imageChanged {
+            requiresImageDownload = true
+        }
         return imageChanged
     }
 

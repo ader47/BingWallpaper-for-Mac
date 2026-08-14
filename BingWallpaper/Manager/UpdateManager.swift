@@ -267,7 +267,8 @@ final class UpdateManager {
                 }
                 var validWallpaperIDs = Set<String>()
                 for descriptor in Database.instance.allImageDescriptors(marketCode: marketCode) {
-                    if await descriptor.image.isValidOnDisk() {
+                    if descriptor.requiresImageDownload == false,
+                       await descriptor.image.isValidOnDisk() {
                         validWallpaperIDs.insert(descriptor.wallpaperIdentifier)
                     }
                 }
@@ -284,6 +285,7 @@ final class UpdateManager {
                         .contains(descriptor.wallpaperIdentifier)
                     do {
                         try await descriptor.image.downloadAndSaveToDisk()
+                        try Database.instance.markImageDownloadCompleted(for: descriptor)
                         downloadedAnImage = true
                         replacedExistingImage = replacedExistingImage || replacesExistingImage
                         marketHasAvailableImage = true

@@ -260,9 +260,48 @@ final class DatabaseTests: XCTestCase {
         XCTAssertEqual(database.allImageDescriptors().first?.marketCode, "zh-CN")
     }
 
-    private func makeEntry(startDate: String) -> DownloadManager.ImageEntry {
+    func testChangedImageRemainsPendingUntilDownloadIsRecorded() throws {
+        let database = Database(inMemory: true)
+        let originalEntry = makeEntry(
+            startDate: "20250102",
+            imageURL: "/th?id=OHR.Original_1920x1080.jpg"
+        )
+        _ = try database.updateImageDescriptors(from: [originalEntry], marketCode: "en-US")
+        let descriptor = try XCTUnwrap(database.allImageDescriptors().first)
+        try database.markImageDownloadCompleted(for: descriptor)
+        XCTAssertFalse(descriptor.requiresImageDownload)
+
+        let changedEntry = makeEntry(
+            startDate: "20250102",
+            imageURL: "/th?id=OHR.Replacement_1920x1080.jpg"
+        )
+        let firstUpdate = try database.updateImageDescriptors(
+            from: [changedEntry],
+            marketCode: "en-US"
+        )
+        XCTAssertTrue(descriptor.requiresImageDownload)
+        XCTAssertTrue(firstUpdate.wallpaperIDsRequiringDownload.contains(
+            descriptor.wallpaperIdentifier
+        ))
+
+        let retryUpdate = try database.updateImageDescriptors(
+            from: [changedEntry],
+            marketCode: "en-US"
+        )
+        XCTAssertTrue(retryUpdate.wallpaperIDsRequiringDownload.contains(
+            descriptor.wallpaperIdentifier
+        ))
+
+        try database.markImageDownloadCompleted(for: descriptor)
+        XCTAssertFalse(descriptor.requiresImageDownload)
+    }
+
+    private func makeEntry(
+        startDate: String,
+        imageURL: String = "/th?id=OHR.Example_1920x1080.jpg"
+    ) -> DownloadManager.ImageEntry {
         DownloadManager.ImageEntry(
-            url: "/th?id=OHR.Example_1920x1080.jpg",
+            url: imageURL,
             enddate: nextDay(after: startDate),
             startdate: startDate,
             copyright: "Example (© Photographer)",
