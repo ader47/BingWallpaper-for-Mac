@@ -7,23 +7,90 @@ private let logger = Logger(
     category: Logging.Category.Update.rawValue
 )
 
+enum WallpaperUpdatePhase: Equatable {
+    case idle
+    case updating
+    case succeeded
+    case retrying
+    case failed
+}
+
+enum WallpaperUpdateFailureStage: Equatable {
+    case metadata
+    case images
+
+    var title: String {
+        switch self {
+        case .metadata:
+            return "Wallpaper list"
+        case .images:
+            return "Image download"
+        }
+    }
+}
+
+struct WallpaperUpdateFailure: Equatable {
+    let stage: WallpaperUpdateFailureStage
+    let message: String
+    let occurredAt: Date
+}
+
+struct WallpaperUpdateStatus: Equatable {
+    let phase: WallpaperUpdatePhase
+    let lastSuccessAt: Date?
+    let lastAttemptAt: Date?
+    let nextAttemptAt: Date?
+    let failure: WallpaperUpdateFailure?
+    let consecutiveFailures: Int
+
+    var menuTitle: String {
+        switch phase {
+        case .idle, .succeeded:
+            return "Update Status: Up to Date"
+        case .updating:
+            return "Update Status: Updating…"
+        case .retrying:
+            return "Update Status: Failed — Retry Scheduled"
+        case .failed:
+            return "Update Status: Failed"
+        }
+    }
+}
+
 protocol UpdateManagerDelegate: AnyObject {
     @MainActor
     func downloadedNewImage()
+    @MainActor
+    func updateStatusDidChange(_ status: WallpaperUpdateStatus)
 }
 
 final class UpdateManager: @unchecked Sendable {
     private static let ACTIVITY_IDENTIFIER = "com.2h4u.BingWallpaper.update"
 
     weak var delegate: UpdateManagerDelegate?
-    private let settings = Settings()
+    private let settings: Settings
     private var activity: NSBackgroundActivityScheduler?
     private var pendingCompletion: NSBackgroundActivityScheduler.CompletionHandler?
     private var consecutiveFailures = 0
     private var isUpdating = false
+    private(set) var status: WallpaperUpdateStatus
 
     private static let RETRY_BASE_INTERVAL: TimeInterval = 30
     private static let RETRY_MAX_INTERVAL: TimeInterval = 30 * 60
+
+    init(settings: Settings = Settings()) {
+        self.settings = settings
+        let lastUpdate = settings.lastUpdate
+        let lastSuccessAt = lastUpdate == Date.distantPast ? nil : lastUpdate
+        self.status = WallpaperUpdateStatus(
+            phase: .idle,
+            lastSuccessAt: lastSuccessAt,
+            lastAttemptAt: nil,
+            nextAttemptAt: nil,
+            failure: nil,
+            consecutiveFailures: 0
+        )
+    }
 
     @MainActor
     func start() {
@@ -38,13 +105,23 @@ final class UpdateManager: @unchecked Sendable {
             return
         }
 
-        scheduleNextActivity()
+        let nextUpdateAt = scheduleNextActivity()
+        publishStatus(WallpaperUpdateStatus(
+            phase: .idle,
+            lastSuccessAt: lastSuccessfulUpdate,
+            lastAttemptAt: status.lastAttemptAt,
+            nextAttemptAt: nextUpdateAt,
+            failure: nil,
+            consecutiveFailures: 0
+        ))
     }
 
     @MainActor
-    private func scheduleNextActivity(overrideInterval: TimeInterval? = nil) {
+    @discardableResult
+    private func scheduleNextActivity(overrideInterval: TimeInterval? = nil) -> Date {
         let nextFetchInterval = overrideInterval ?? UpdateScheduleManager.nextFetchTimeInterval()
-        logger.info("Next update at \(Date().addingTimeInterval(nextFetchInterval), privacy: .public)")
+        let nextUpdateAt = Date().addingTimeInterval(nextFetchInterval)
+        logger.info("Next update at \(nextUpdateAt, privacy: .public)")
 
         activity?.invalidate()
 
@@ -65,6 +142,7 @@ final class UpdateManager: @unchecked Sendable {
         }
 
         activity = scheduler
+        return nextUpdateAt
     }
         
     @MainActor
@@ -100,7 +178,18 @@ final class UpdateManager: @unchecked Sendable {
             return
         }
 
+        activity?.invalidate()
+        activity = nil
         isUpdating = true
+        let attemptDate = Date()
+        publishStatus(WallpaperUpdateStatus(
+            phase: .updating,
+            lastSuccessAt: lastSuccessfulUpdate,
+            lastAttemptAt: attemptDate,
+            nextAttemptAt: nil,
+            failure: nil,
+            consecutiveFailures: consecutiveFailures
+        ))
         logger.info("Updating")
         let marketCode = settings.bingMarketCode
 
@@ -112,7 +201,7 @@ final class UpdateManager: @unchecked Sendable {
             } catch {
                 logger.error("Failed to download image entries with error: \(error.localizedDescription, privacy: .public)")
                 await MainActor.run { [weak self] in
-                    self?.finishUpdateWithFailure()
+                    self?.finishUpdateWithFailure(stage: .metadata, error: error)
                 }
                 return
             }
@@ -123,6 +212,7 @@ final class UpdateManager: @unchecked Sendable {
                 .filter { $0.image.isOnDisk() == false }
 
             var imageDownloadFailed = false
+            var firstImageDownloadError: Error?
             var downloadedAnImage = false
             for descriptor in missingDescriptors {
                 do {
@@ -130,6 +220,9 @@ final class UpdateManager: @unchecked Sendable {
                     downloadedAnImage = true
                 } catch {
                     imageDownloadFailed = true
+                    if firstImageDownloadError == nil {
+                        firstImageDownloadError = error
+                    }
                     logger.error("Failed to download and store image \(descriptor.imageUrl, privacy: .public) with error: \(error.localizedDescription, privacy: .public)")
                 }
             }
@@ -140,12 +233,16 @@ final class UpdateManager: @unchecked Sendable {
                     self.delegate?.downloadedNewImage()
                 }
                 if imageDownloadFailed {
-                    self.finishUpdateWithFailure()
+                    self.finishUpdateWithFailure(
+                        stage: .images,
+                        error: firstImageDownloadError ?? ImageError.dataNotValid
+                    )
                     return
                 }
 
                 self.isUpdating = false
-                self.settings.lastUpdate = Date()
+                let completedAt = Date()
+                self.settings.lastUpdate = completedAt
                 self.consecutiveFailures = 0
                 self.cleanup()
 
@@ -153,30 +250,66 @@ final class UpdateManager: @unchecked Sendable {
                 self.pendingCompletion = nil
                 completion?(.finished)
 
-                self.scheduleNextActivity()
+                let nextUpdateAt = self.scheduleNextActivity()
+                self.publishStatus(WallpaperUpdateStatus(
+                    phase: .succeeded,
+                    lastSuccessAt: completedAt,
+                    lastAttemptAt: attemptDate,
+                    nextAttemptAt: nextUpdateAt,
+                    failure: nil,
+                    consecutiveFailures: 0
+                ))
             }
         }
     }
 
     @MainActor
-    private func finishUpdateWithFailure() {
+    private func finishUpdateWithFailure(stage: WallpaperUpdateFailureStage, error: Error) {
         isUpdating = false
         let completion = pendingCompletion
         pendingCompletion = nil
         completion?(.deferred)
-        scheduleRetryAfterFailure()
+        scheduleRetryAfterFailure(stage: stage, error: error)
     }
 
     @MainActor
-    private func scheduleRetryAfterFailure() {
+    private func scheduleRetryAfterFailure(stage: WallpaperUpdateFailureStage, error: Error) {
         consecutiveFailures += 1
-        let exponent = min(consecutiveFailures - 1, 10)
-        let backoff = min(
-            UpdateManager.RETRY_BASE_INTERVAL * pow(2.0, Double(exponent)),
-            UpdateManager.RETRY_MAX_INTERVAL
-        )
+        let backoff = Self.retryInterval(forFailureCount: consecutiveFailures)
         logger.info("Update failed (\(self.consecutiveFailures, privacy: .public) in a row), retrying in \(backoff, privacy: .public)s")
-        scheduleNextActivity(overrideInterval: backoff)
+        let failureDate = Date()
+        let nextRetryAt = scheduleNextActivity(overrideInterval: backoff)
+        publishStatus(WallpaperUpdateStatus(
+            phase: .retrying,
+            lastSuccessAt: lastSuccessfulUpdate,
+            lastAttemptAt: status.lastAttemptAt ?? failureDate,
+            nextAttemptAt: nextRetryAt,
+            failure: WallpaperUpdateFailure(
+                stage: stage,
+                message: error.localizedDescription,
+                occurredAt: failureDate
+            ),
+            consecutiveFailures: consecutiveFailures
+        ))
+    }
+
+    static func retryInterval(forFailureCount failureCount: Int) -> TimeInterval {
+        let exponent = min(max(failureCount, 1) - 1, 10)
+        return min(
+            RETRY_BASE_INTERVAL * pow(2.0, Double(exponent)),
+            RETRY_MAX_INTERVAL
+        )
+    }
+
+    private var lastSuccessfulUpdate: Date? {
+        let lastUpdate = settings.lastUpdate
+        return lastUpdate == Date.distantPast ? nil : lastUpdate
+    }
+
+    @MainActor
+    private func publishStatus(_ newStatus: WallpaperUpdateStatus) {
+        status = newStatus
+        delegate?.updateStatusDidChange(newStatus)
     }
     
     @MainActor

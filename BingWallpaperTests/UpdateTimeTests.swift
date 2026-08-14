@@ -191,3 +191,57 @@ final class WallpaperDisplaySettingsTests: XCTestCase {
         operation(Settings(defaults: defaults))
     }
 }
+
+final class UpdateStatusTests: XCTestCase {
+    func testStatusMenuTitles() {
+        let base = WallpaperUpdateStatus(
+            phase: .idle,
+            lastSuccessAt: nil,
+            lastAttemptAt: nil,
+            nextAttemptAt: nil,
+            failure: nil,
+            consecutiveFailures: 0
+        )
+
+        XCTAssertEqual(base.menuTitle, "Update Status: Up to Date")
+        XCTAssertEqual(status(from: base, phase: .updating).menuTitle, "Update Status: Updating…")
+        XCTAssertEqual(status(from: base, phase: .retrying).menuTitle, "Update Status: Failed — Retry Scheduled")
+        XCTAssertEqual(status(from: base, phase: .failed).menuTitle, "Update Status: Failed")
+    }
+
+    func testRetryBackoffStartsAtThirtySecondsAndCapsAtThirtyMinutes() {
+        XCTAssertEqual(UpdateManager.retryInterval(forFailureCount: 0), 30)
+        XCTAssertEqual(UpdateManager.retryInterval(forFailureCount: 1), 30)
+        XCTAssertEqual(UpdateManager.retryInterval(forFailureCount: 2), 60)
+        XCTAssertEqual(UpdateManager.retryInterval(forFailureCount: 3), 120)
+        XCTAssertEqual(UpdateManager.retryInterval(forFailureCount: 20), 30 * 60)
+    }
+
+    func testManagerInitialStatusUsesPersistedLastSuccess() {
+        let suiteName = "BingWallpaperTests.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let expectedDate = Date(timeIntervalSince1970: 1_700_000_000)
+        let settings = Settings(defaults: defaults)
+        settings.lastUpdate = expectedDate
+
+        let manager = UpdateManager(settings: settings)
+
+        XCTAssertEqual(manager.status.lastSuccessAt, expectedDate)
+        XCTAssertEqual(manager.status.phase, .idle)
+    }
+
+    private func status(
+        from status: WallpaperUpdateStatus,
+        phase: WallpaperUpdatePhase
+    ) -> WallpaperUpdateStatus {
+        return WallpaperUpdateStatus(
+            phase: phase,
+            lastSuccessAt: status.lastSuccessAt,
+            lastAttemptAt: status.lastAttemptAt,
+            nextAttemptAt: status.nextAttemptAt,
+            failure: status.failure,
+            consecutiveFailures: status.consecutiveFailures
+        )
+    }
+}

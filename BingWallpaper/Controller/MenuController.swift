@@ -16,6 +16,8 @@ class MenuController: NSObject {
     var updateManager: UpdateManager?
     private static let IMAGE_VIEW_TAG = 6
     private static let TEXT_VIEW_TAG = 7
+    private static let UPDATE_STATUS_TAG = 8
+    private static let REFRESH_IMAGES_TAG = 9
     private lazy var settingsWc = SettingsWc.instance()
     
     // MARK: - UI setup
@@ -30,6 +32,7 @@ class MenuController: NSObject {
         self.statusItem!.menu = menu
         
         showNewestImage()
+        updateStatusMenu()
     }
     
     private func createStatusBarItem() -> NSStatusItem {
@@ -58,9 +61,14 @@ class MenuController: NSObject {
         menu.addItem(imageItem)
         
         menu.addItem(NSMenuItem.separator())
+
+        let updateStatusItem = NSMenuItem(title: "Update Status", action: nil, keyEquivalent: "")
+        updateStatusItem.tag = MenuController.UPDATE_STATUS_TAG
+        menu.addItem(updateStatusItem)
         
         let refreshItem = NSMenuItem(title: "Refresh Images", action: #selector(refreshImages), keyEquivalent: "")
         refreshItem.target = self
+        refreshItem.tag = MenuController.REFRESH_IMAGES_TAG
         menu.addItem(refreshItem)
         
         menu.addItem(NSMenuItem.separator())
@@ -193,6 +201,75 @@ class MenuController: NSObject {
         if description == nil { return "" }
         return description?.split(separator: "(").last?.replacingOccurrences(of: ")", with: "") ?? ""
     }
+
+    @MainActor
+    private func updateStatusMenu() {
+        guard let menu,
+              let updateManager,
+              let statusItem = menu.item(withTag: MenuController.UPDATE_STATUS_TAG) else {
+            return
+        }
+
+        let status = updateManager.status
+        statusItem.title = status.menuTitle
+        statusItem.image = updateStatusImage(for: status.phase)
+
+        let detailsMenu = NSMenu()
+        addStatusDetail(
+            title: "Last successful update: \(formattedDate(status.lastSuccessAt))",
+            to: detailsMenu
+        )
+        if let lastAttemptAt = status.lastAttemptAt {
+            addStatusDetail(title: "Last attempt: \(formattedDate(lastAttemptAt))", to: detailsMenu)
+        }
+        if let nextAttemptAt = status.nextAttemptAt {
+            let label = status.phase == .retrying ? "Next retry" : "Next update"
+            addStatusDetail(title: "\(label): \(formattedDate(nextAttemptAt))", to: detailsMenu)
+        }
+        if let failure = status.failure {
+            detailsMenu.addItem(.separator())
+            addStatusDetail(title: "Failed step: \(failure.stage.title)", to: detailsMenu)
+            let message = failure.message.count > 120
+                ? String(failure.message.prefix(117)) + "…"
+                : failure.message
+            let errorItem = NSMenuItem(title: message, action: nil, keyEquivalent: "")
+            errorItem.toolTip = failure.message
+            errorItem.isEnabled = false
+            detailsMenu.addItem(errorItem)
+        }
+        statusItem.submenu = detailsMenu
+
+        if let refreshItem = menu.item(withTag: MenuController.REFRESH_IMAGES_TAG) {
+            refreshItem.title = status.phase == .retrying || status.phase == .failed
+                ? "Retry Now"
+                : "Refresh Images"
+            refreshItem.isEnabled = status.phase != .updating
+        }
+    }
+
+    private func addStatusDetail(title: String, to menu: NSMenu) {
+        let item = NSMenuItem(title: title, action: nil, keyEquivalent: "")
+        item.isEnabled = false
+        menu.addItem(item)
+    }
+
+    private func formattedDate(_ date: Date?) -> String {
+        guard let date else { return "Never" }
+        return DateFormatter.localizedString(from: date, dateStyle: .short, timeStyle: .short)
+    }
+
+    private func updateStatusImage(for phase: WallpaperUpdatePhase) -> NSImage? {
+        let symbolName: String
+        switch phase {
+        case .idle, .succeeded:
+            symbolName = "checkmark.circle"
+        case .updating:
+            symbolName = "arrow.triangle.2.circlepath"
+        case .retrying, .failed:
+            symbolName = "exclamationmark.triangle"
+        }
+        return NSImage(systemSymbolName: symbolName, accessibilityDescription: "Wallpaper update status")
+    }
     
     @MainActor
     private func showNewestImage() {
@@ -214,11 +291,16 @@ extension MenuController: UpdateManagerDelegate {
     func downloadedNewImage() {
         showNewestImage()
     }
+
+    func updateStatusDidChange(_ status: WallpaperUpdateStatus) {
+        updateStatusMenu()
+    }
 }
 
 extension MenuController: NSMenuDelegate {
     func menuNeedsUpdate(_ menu: NSMenu) {
         updateImageSelectorView(newSelectedDescriptorIndex: selectedDescriptorIndex)
+        updateStatusMenu()
     }
 }
 

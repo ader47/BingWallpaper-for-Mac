@@ -17,3 +17,7 @@ Custom image locations are persisted using a macOS security-scoped bookmark.
 Downloaded images are validated before they are stored, and app updates are
 accepted only when the installer matches the SHA-256 checksum published with
 the GitHub release.
+
+The menu reports wallpaper update progress, the last successful update, the
+next scheduled attempt, and download errors. Failed updates use exponential
+backoff and can be retried immediately from the menu.
