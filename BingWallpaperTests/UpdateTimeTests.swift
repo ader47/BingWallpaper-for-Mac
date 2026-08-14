@@ -293,3 +293,39 @@ final class WallpaperImageInfoTests: XCTestCase {
         XCTAssertEqual(info.date, "not-a-date")
     }
 }
+
+final class FavoriteWallpaperSettingsTests: XCTestCase {
+    func testFavoriteAndPinnedWallpaperSettingsRoundTrip() {
+        withSettings { settings in
+            settings.favoriteWallpaperIDs = ["en-US:20250102", "automatic:20250101"]
+            settings.pinnedWallpaperID = "en-US:20250102"
+
+            XCTAssertEqual(
+                settings.favoriteWallpaperIDs,
+                ["en-US:20250102", "automatic:20250101"]
+            )
+            XCTAssertEqual(settings.pinnedWallpaperID, "en-US:20250102")
+
+            settings.pinnedWallpaperID = nil
+            XCTAssertNil(settings.pinnedWallpaperID)
+        }
+    }
+
+    func testWallpaperIdentifierIncludesMarket() {
+        XCTAssertEqual(
+            ImageDescriptor.wallpaperIdentifier(startDate: "20250102", marketCode: "zh-CN"),
+            "zh-CN:20250102"
+        )
+        XCTAssertEqual(
+            ImageDescriptor.wallpaperIdentifier(startDate: "20250102", marketCode: nil),
+            "automatic:20250102"
+        )
+    }
+
+    private func withSettings(_ operation: (Settings) -> Void) {
+        let suiteName = "BingWallpaperTests.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        operation(Settings(defaults: defaults))
+    }
+}

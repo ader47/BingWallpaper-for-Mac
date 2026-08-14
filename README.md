@@ -25,3 +25,7 @@ backoff and can be retried immediately from the menu.
 Click the wallpaper description in the menu to see its date, Bing region and
 full copyright information. The same menu can open the original Bing page,
 reveal the downloaded file in Finder, or save a copy elsewhere.
+
+Wallpapers can also be pinned or added to Favorites. A pinned wallpaper is not
+replaced by scheduled downloads, while favorites remain available from the
+main menu and are protected from automatic retention cleanup.

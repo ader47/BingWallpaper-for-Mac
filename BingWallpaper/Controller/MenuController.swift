@@ -19,6 +19,8 @@ class MenuController: NSObject {
     private static let TEXT_VIEW_TAG = 7
     private static let UPDATE_STATUS_TAG = 8
     private static let REFRESH_IMAGES_TAG = 9
+    private static let PIN_WALLPAPER_TAG = 10
+    private static let FAVORITES_TAG = 11
     private lazy var settingsWc = SettingsWc.instance()
     
     // MARK: - UI setup
@@ -71,6 +73,15 @@ class MenuController: NSObject {
         refreshItem.target = self
         refreshItem.tag = MenuController.REFRESH_IMAGES_TAG
         menu.addItem(refreshItem)
+
+        let pinItem = NSMenuItem(title: "Pin Current Wallpaper", action: #selector(togglePinnedWallpaper(_:)), keyEquivalent: "")
+        pinItem.target = self
+        pinItem.tag = MenuController.PIN_WALLPAPER_TAG
+        menu.addItem(pinItem)
+
+        let favoritesItem = NSMenuItem(title: "Favorites", action: nil, keyEquivalent: "")
+        favoritesItem.tag = MenuController.FAVORITES_TAG
+        menu.addItem(favoritesItem)
         
         menu.addItem(NSMenuItem.separator())
         
@@ -153,6 +164,60 @@ class MenuController: NSObject {
     }
 
     @MainActor
+    @objc func toggleFavorite(_ sender: NSMenuItem) {
+        guard let descriptor = descriptors[safe: selectedDescriptorIndex] else { return }
+        var favorites = settings.favoriteWallpaperIDs
+        if favorites.contains(descriptor.wallpaperIdentifier) {
+            favorites.remove(descriptor.wallpaperIdentifier)
+        } else {
+            favorites.insert(descriptor.wallpaperIdentifier)
+        }
+        settings.favoriteWallpaperIDs = favorites
+        updateFavoriteMenus()
+    }
+
+    @MainActor
+    @objc func togglePinnedWallpaper(_ sender: NSMenuItem) {
+        if sender.tag == MenuController.PIN_WALLPAPER_TAG,
+           settings.pinnedWallpaperID != nil {
+            settings.pinnedWallpaperID = nil
+            if let descriptor = descriptors[safe: selectedDescriptorIndex] {
+                WallpaperManager.shared.setWallpaper(descriptor: descriptor)
+            }
+        } else if let descriptor = descriptors[safe: selectedDescriptorIndex] {
+            if settings.pinnedWallpaperID == descriptor.wallpaperIdentifier {
+                settings.pinnedWallpaperID = nil
+            } else {
+                settings.pinnedWallpaperID = descriptor.wallpaperIdentifier
+            }
+            WallpaperManager.shared.setWallpaper(descriptor: descriptor)
+        }
+        updateFavoriteMenus()
+    }
+
+    @MainActor
+    @objc func selectFavoriteWallpaper(_ sender: NSMenuItem) {
+        guard let wallpaperID = sender.representedObject as? String,
+              let descriptor = Database.instance.allImageDescriptors()
+                .first(where: { $0.wallpaperIdentifier == wallpaperID }),
+              descriptor.image.isOnDisk() else {
+            return
+        }
+
+        descriptors = Database.instance.allImageDescriptors(marketCode: descriptor.marketCode)
+            .filter { $0.image.isOnDisk() }
+        guard let index = descriptors.firstIndex(where: { $0.wallpaperIdentifier == wallpaperID }) else {
+            return
+        }
+        selectedDescriptorIndex = index
+        if settings.pinnedWallpaperID != nil {
+            settings.pinnedWallpaperID = wallpaperID
+        }
+        WallpaperManager.shared.setWallpaper(descriptor: descriptor)
+        updateImageSelectorView(newSelectedDescriptorIndex: index)
+    }
+
+    @MainActor
     @objc func saveImageCopy(_ sender: NSMenuItem) {
         guard let descriptor = descriptors[safe: selectedDescriptorIndex] else { return }
 
@@ -193,6 +258,7 @@ class MenuController: NSObject {
     }
     
     private func updateSelectedImage(newSelectedDescriptorIndex: Int) {
+        guard settings.pinnedWallpaperID == nil else { return }
         if let descriptor = descriptors[safe: newSelectedDescriptorIndex] {
             WallpaperManager.shared.setWallpaper(descriptor: descriptor)
         }
@@ -252,6 +318,23 @@ class MenuController: NSObject {
         }
 
         menu.addItem(.separator())
+        let isFavorite = settings.favoriteWallpaperIDs.contains(descriptor.wallpaperIdentifier)
+        addImageAction(
+            title: isFavorite ? "Remove from Favorites" : "Add to Favorites",
+            selector: #selector(toggleFavorite(_:)),
+            to: menu
+        )
+        let pinTitle: String
+        if settings.pinnedWallpaperID == descriptor.wallpaperIdentifier {
+            pinTitle = "Unpin Wallpaper"
+        } else if settings.pinnedWallpaperID == nil {
+            pinTitle = "Pin This Wallpaper"
+        } else {
+            pinTitle = "Replace Pinned Wallpaper"
+        }
+        addImageAction(title: pinTitle, selector: #selector(togglePinnedWallpaper(_:)), to: menu)
+
+        menu.addItem(.separator())
         addImageAction(title: "Open Source on Bing", selector: #selector(openImageSource(_:)), to: menu)
         addImageAction(title: "Show in Finder", selector: #selector(revealImageInFinder(_:)), to: menu)
         addImageAction(title: "Save a Copy…", selector: #selector(saveImageCopy(_:)), to: menu)
@@ -270,6 +353,59 @@ class MenuController: NSObject {
         let item = NSMenuItem(title: title, action: selector, keyEquivalent: "")
         item.target = self
         menu.addItem(item)
+    }
+
+    @MainActor
+    private func updateFavoriteMenus() {
+        guard let menu else { return }
+        let allDescriptors = Database.instance.allImageDescriptors()
+        let descriptorByID = allDescriptors.reduce(into: [String: ImageDescriptor]()) {
+            $0[$1.wallpaperIdentifier] = $1
+        }
+
+        if let pinItem = menu.item(withTag: MenuController.PIN_WALLPAPER_TAG) {
+            if let pinnedID = settings.pinnedWallpaperID,
+               let pinnedDescriptor = descriptorByID[pinnedID] {
+                let title = pinnedDescriptor.imageInfo.title
+                let shortTitle = title.count > 45 ? String(title.prefix(42)) + "…" : title
+                pinItem.title = "Unpin Wallpaper: \(shortTitle)"
+                pinItem.image = NSImage(systemSymbolName: "pin.fill", accessibilityDescription: "Pinned wallpaper")
+            } else {
+                pinItem.title = "Pin Current Wallpaper"
+                pinItem.image = NSImage(systemSymbolName: "pin", accessibilityDescription: "Pin wallpaper")
+            }
+            pinItem.isEnabled = descriptors[safe: selectedDescriptorIndex] != nil
+        }
+
+        guard let favoritesItem = menu.item(withTag: MenuController.FAVORITES_TAG) else { return }
+        let favoritesMenu = NSMenu(title: "Favorites")
+        let favoriteDescriptors = settings.favoriteWallpaperIDs
+            .compactMap { descriptorByID[$0] }
+            .sorted(by: >)
+        if favoriteDescriptors.isEmpty {
+            let emptyItem = NSMenuItem(title: "No Favorites", action: nil, keyEquivalent: "")
+            emptyItem.isEnabled = false
+            favoritesMenu.addItem(emptyItem)
+        } else {
+            for descriptor in favoriteDescriptors {
+                let info = descriptor.imageInfo
+                let item = NSMenuItem(
+                    title: "\(info.title) — \(info.date)",
+                    action: #selector(selectFavoriteWallpaper(_:)),
+                    keyEquivalent: ""
+                )
+                item.target = self
+                item.representedObject = descriptor.wallpaperIdentifier
+                item.toolTip = "\(info.region)\n\(info.copyright)"
+                item.isEnabled = descriptor.image.isOnDisk()
+                favoritesMenu.addItem(item)
+            }
+        }
+        favoritesItem.title = favoriteDescriptors.isEmpty
+            ? "Favorites"
+            : "Favorites (\(favoriteDescriptors.count))"
+        favoritesItem.image = NSImage(systemSymbolName: "star", accessibilityDescription: "Favorite wallpapers")
+        favoritesItem.submenu = favoritesMenu
     }
 
     @MainActor
@@ -343,15 +479,34 @@ class MenuController: NSObject {
     
     @MainActor
     private func showNewestImage() {
-        self.descriptors = Database.instance.allImageDescriptors(marketCode: settings.bingMarketCode)
+        let downloadedDescriptors = Database.instance.allImageDescriptors()
             .filter { $0.image.isOnDisk() }
+        self.descriptors = downloadedDescriptors
+            .filter { $0.marketCode == settings.bingMarketCode }
+        let pinnedDescriptor = settings.pinnedWallpaperID.flatMap { pinnedID in
+            downloadedDescriptors.first { $0.wallpaperIdentifier == pinnedID }
+        }
+        if settings.pinnedWallpaperID != nil, pinnedDescriptor == nil {
+            settings.pinnedWallpaperID = nil
+        }
         guard descriptors.isEmpty == false else {
             selectedDescriptorIndex = 0
             imageSelectorView?.imageView.image = nil
+            if let pinnedDescriptor {
+                WallpaperManager.shared.setWallpaper(descriptor: pinnedDescriptor)
+            }
+            updateFavoriteMenus()
             return
         }
-        selectedDescriptorIndex = descriptors.count - 1
-        updateSelectedImage(newSelectedDescriptorIndex: selectedDescriptorIndex)
+        selectedDescriptorIndex = pinnedDescriptor.flatMap { pinned in
+            descriptors.firstIndex { $0.wallpaperIdentifier == pinned.wallpaperIdentifier }
+        } ?? descriptors.count - 1
+        if let pinnedDescriptor {
+            WallpaperManager.shared.setWallpaper(descriptor: pinnedDescriptor)
+        } else {
+            updateSelectedImage(newSelectedDescriptorIndex: selectedDescriptorIndex)
+        }
+        updateFavoriteMenus()
     }
 }
 
@@ -371,6 +526,7 @@ extension MenuController: NSMenuDelegate {
     func menuNeedsUpdate(_ menu: NSMenu) {
         updateImageSelectorView(newSelectedDescriptorIndex: selectedDescriptorIndex)
         updateStatusMenu()
+        updateFavoriteMenus()
     }
 }
 

@@ -145,6 +145,8 @@ class SettingsVc: NSViewController {
     
     @IBAction func resetDatabaseButtonAction(_ sender: NSButton) {
         logger.info("Resetting Database...")
+        settings.favoriteWallpaperIDs = []
+        settings.pinnedWallpaperID = nil
         let dateFormatter = DateFormatter()
         dateFormatter.dateFormat = "YYYYMMdd"
         let oldestDateStringToKeep = dateFormatter.string(from: Date())

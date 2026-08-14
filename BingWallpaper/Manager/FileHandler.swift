@@ -94,9 +94,15 @@ class FileHandler {
         }
     }
     
-    static func deleteOldImages(oldestDateStringToKeep: String) {
+    static func deleteOldImages(
+        oldestDateStringToKeep: String,
+        preservingFileNames: Set<String> = []
+    ) {
         getSavedImages()
             .filter { imageUrl in
+                guard preservingFileNames.contains(imageUrl.lastPathComponent) == false else {
+                    return false
+                }
                 let fileName = imageUrl.deletingPathExtension().lastPathComponent
                 let dateString = String(fileName.suffix(8))
                 return dateString.count == 8 &&

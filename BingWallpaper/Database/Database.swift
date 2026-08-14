@@ -39,11 +39,17 @@ class Database {
     }
     
     @MainActor
-    func deleteImageDescriptors(olderThan oldestDateStringToKeep: String) throws {
+    func deleteImageDescriptors(
+        olderThan oldestDateStringToKeep: String,
+        preserving wallpaperIDs: Set<String> = []
+    ) throws {
         let managedContext = persistentContainer.viewContext
         
         allImageDescriptors()
-            .filter { $0.startDate <= oldestDateStringToKeep }
+            .filter {
+                $0.startDate <= oldestDateStringToKeep &&
+                    wallpaperIDs.contains($0.wallpaperIdentifier) == false
+            }
             .forEach { managedContext.delete($0) }
         
         try managedContext.save()

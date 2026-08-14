@@ -89,6 +89,14 @@ public final class ImageDescriptor: NSManagedObject {
             marketCode: marketCode
         )
     }
+
+    var wallpaperIdentifier: String {
+        return Self.wallpaperIdentifier(startDate: startDate, marketCode: marketCode)
+    }
+
+    static func wallpaperIdentifier(startDate: String, marketCode: String?) -> String {
+        return "\(marketCode ?? "automatic"):\(startDate)"
+    }
     
     static func == (lhs: ImageDescriptor, rhs: ImageDescriptor) -> Bool {
         return lhs.startDate == rhs.startDate && lhs.marketCode == rhs.marketCode

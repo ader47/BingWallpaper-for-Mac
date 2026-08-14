@@ -151,8 +151,23 @@ final class UpdateManager: @unchecked Sendable {
         // TODO: @2h4u: probably do this in a migration function in appdelegate
         
         guard let oldestDateStringToKeep = settings.oldestDateStringToKeep() else { return }
-        try? Database.instance.deleteImageDescriptors(olderThan: oldestDateStringToKeep)
-        FileHandler.deleteOldImages(oldestDateStringToKeep: oldestDateStringToKeep)
+        var preservedIDs = settings.favoriteWallpaperIDs
+        if let pinnedWallpaperID = settings.pinnedWallpaperID {
+            preservedIDs.insert(pinnedWallpaperID)
+        }
+        let preservedFileNames = Set(
+            Database.instance.allImageDescriptors()
+                .filter { preservedIDs.contains($0.wallpaperIdentifier) }
+                .map { $0.image.fileName }
+        )
+        try? Database.instance.deleteImageDescriptors(
+            olderThan: oldestDateStringToKeep,
+            preserving: preservedIDs
+        )
+        FileHandler.deleteOldImages(
+            oldestDateStringToKeep: oldestDateStringToKeep,
+            preservingFileNames: preservedFileNames
+        )
     }
     
     private func setupObserver() {

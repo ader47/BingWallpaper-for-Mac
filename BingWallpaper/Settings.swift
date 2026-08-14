@@ -210,6 +210,28 @@ public class Settings {
             defaults.set(newValue.sorted(), forKey: Settings.SELECTED_WALLPAPER_DISPLAY_IDS)
         }
     }
+
+    var favoriteWallpaperIDs: Set<String> {
+        get {
+            return Set(defaults.stringArray(forKey: Settings.FAVORITE_WALLPAPER_IDS) ?? [])
+        }
+        set {
+            defaults.set(newValue.sorted(), forKey: Settings.FAVORITE_WALLPAPER_IDS)
+        }
+    }
+
+    var pinnedWallpaperID: String? {
+        get {
+            return defaults.string(forKey: Settings.PINNED_WALLPAPER_ID)
+        }
+        set {
+            if let newValue {
+                defaults.set(newValue, forKey: Settings.PINNED_WALLPAPER_ID)
+            } else {
+                defaults.removeObject(forKey: Settings.PINNED_WALLPAPER_ID)
+            }
+        }
+    }
     
     public var lastUpdate: Date {
         get {
@@ -278,6 +300,8 @@ public class Settings {
     private static let BING_MARKET_CODE = "BING_MARKET_CODE"
     private static let WALLPAPER_DISPLAY_MODE = "WALLPAPER_DISPLAY_MODE"
     private static let SELECTED_WALLPAPER_DISPLAY_IDS = "SELECTED_WALLPAPER_DISPLAY_IDS"
+    private static let FAVORITE_WALLPAPER_IDS = "FAVORITE_WALLPAPER_IDS"
+    private static let PINNED_WALLPAPER_ID = "PINNED_WALLPAPER_ID"
     private static let LAST_UPDATE = "LAST_UPDATE"
     private static let KEEP_IMAGE_DURATION = "KEEP_IMAGE_DURATION"
 }
