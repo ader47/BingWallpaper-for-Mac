@@ -225,8 +225,8 @@ final class UpdateManager {
         let marketCodes = settings.requiredBingMarketCodes
 
         Task { [weak self] in
+            var metadataFailure: Error?
             var imageFailureRequiringRetry: Error?
-            var downloadedAnImage = false
             var replacedExistingImage = false
 
             for marketCode in marketCodes {
@@ -238,13 +238,10 @@ final class UpdateManager {
                     )
                 } catch {
                     logger.error("Failed to download image entries for market \(marketCode ?? "automatic", privacy: .public) with error: \(error.localizedDescription, privacy: .public)")
-                    await MainActor.run { [weak self] in
-                        if downloadedAnImage {
-                            self?.delegate?.wallpaperLibraryDidChange(forceWallpaperRefresh: replacedExistingImage)
-                        }
-                        self?.finishUpdateWithFailure(stage: .metadata, error: error)
+                    if metadataFailure == nil {
+                        metadataFailure = error
                     }
-                    return
+                    continue
                 }
 
                 let descriptorUpdate: Database.ImageDescriptorUpdate
@@ -255,15 +252,10 @@ final class UpdateManager {
                     )
                 } catch {
                     logger.error("Failed to store wallpaper metadata for market \(marketCode ?? "automatic", privacy: .public): \(error.localizedDescription, privacy: .public)")
-                    await MainActor.run { [weak self] in
-                        if downloadedAnImage {
-                            self?.delegate?.wallpaperLibraryDidChange(
-                                forceWallpaperRefresh: replacedExistingImage
-                            )
-                        }
-                        self?.finishUpdateWithFailure(stage: .metadata, error: error)
+                    if metadataFailure == nil {
+                        metadataFailure = error
                     }
-                    return
+                    continue
                 }
                 var validWallpaperIDs = Set<String>()
                 for descriptor in Database.instance.allImageDescriptors(marketCode: marketCode) {
@@ -286,7 +278,6 @@ final class UpdateManager {
                     do {
                         try await descriptor.image.downloadAndSaveToDisk()
                         try Database.instance.markImageDownloadCompleted(for: descriptor)
-                        downloadedAnImage = true
                         replacedExistingImage = replacedExistingImage || replacesExistingImage
                         marketHasAvailableImage = true
                     } catch {
@@ -313,6 +304,10 @@ final class UpdateManager {
                 // already on disk (for example after Reset Database), so the UI
                 // must refresh even when no download occurred.
                 self.delegate?.wallpaperLibraryDidChange(forceWallpaperRefresh: replacedExistingImage)
+                if let metadataFailure {
+                    self.finishUpdateWithFailure(stage: .metadata, error: metadataFailure)
+                    return
+                }
                 if let imageFailureRequiringRetry {
                     self.finishUpdateWithFailure(
                         stage: .images,
