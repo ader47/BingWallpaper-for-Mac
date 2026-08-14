@@ -53,7 +53,14 @@ class Image {
     
     @MainActor
     func loadFromDisk() async throws -> Data {
-        return try FileHandler.loadImageDataFromDisk(at: downloadPath)
+        let downloadPath = downloadPath
+        let wallpaperDirectory = FileHandler.wallpaperDirectory()
+        return try await Task.detached(priority: .userInitiated) {
+            try FileHandler.loadImageDataFromDisk(
+                at: downloadPath,
+                wallpaperDirectory: wallpaperDirectory
+            )
+        }.value
     }
     
     @MainActor
@@ -61,8 +68,16 @@ class Image {
         guard let descriptor else {
             throw Error.missingDescriptor
         }
+        let downloadPath = downloadPath
+        let wallpaperDirectory = FileHandler.wallpaperDirectory()
         let imageData = try await DownloadManager.downloadImage(from: descriptor.imageUrl)
-        try FileHandler.saveImageDataToDisk(imageData: imageData, toUrl: downloadPath)
+        try await Task.detached(priority: .utility) {
+            try FileHandler.saveImageDataToDisk(
+                imageData: imageData,
+                toUrl: downloadPath,
+                wallpaperDirectory: wallpaperDirectory
+            )
+        }.value
     }
     
     static func isSavedToDisk(descriptor: ImageDescriptor) -> Bool {
@@ -71,5 +86,17 @@ class Image {
     
     func isOnDisk() -> Bool {
         return FileHandler.wallpaperFileExists(at: downloadPath)
+    }
+
+    @MainActor
+    func isValidOnDisk() async -> Bool {
+        let downloadPath = downloadPath
+        let wallpaperDirectory = FileHandler.wallpaperDirectory()
+        return await Task.detached(priority: .utility) {
+            FileHandler.wallpaperFileIsValid(
+                at: downloadPath,
+                wallpaperDirectory: wallpaperDirectory
+            )
+        }.value
     }
 }

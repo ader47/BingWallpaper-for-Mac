@@ -7,7 +7,43 @@ private let logger = Logger(
     category: Logging.Category.FileHandler.rawValue
 )
 
+private final class WallpaperFileValidationCache: @unchecked Sendable {
+    private struct Fingerprint: Equatable {
+        let modificationDate: Date?
+        let fileSize: Int?
+    }
+
+    private let lock = NSLock()
+    private var fingerprints: [String: Fingerprint] = [:]
+
+    func isKnownValid(_ url: URL, fingerprint: (Date?, Int?)) -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return fingerprints[url.path] == Fingerprint(
+            modificationDate: fingerprint.0,
+            fileSize: fingerprint.1
+        )
+    }
+
+    func markValid(_ url: URL, fingerprint: (Date?, Int?)) {
+        lock.lock()
+        fingerprints[url.path] = Fingerprint(
+            modificationDate: fingerprint.0,
+            fileSize: fingerprint.1
+        )
+        lock.unlock()
+    }
+
+    func invalidate(_ url: URL) {
+        lock.lock()
+        fingerprints.removeValue(forKey: url.path)
+        lock.unlock()
+    }
+}
+
 class FileHandler {
+    private static let validationCache = WallpaperFileValidationCache()
+
     static func usersPictureDirectory() -> String {
         guard let picturesDirectory = NSSearchPathForDirectoriesInDomains(.picturesDirectory, .userDomainMask, true).first else {
             logger.error("Couldn't find picture directory of user")
@@ -31,7 +67,14 @@ class FileHandler {
 
     @discardableResult
     static func withWallpaperDirectoryAccess<T>(_ operation: (URL) throws -> T) rethrows -> T {
-        let directory = wallpaperDirectory()
+        try withWallpaperDirectoryAccess(at: wallpaperDirectory(), operation)
+    }
+
+    @discardableResult
+    static func withWallpaperDirectoryAccess<T>(
+        at directory: URL,
+        _ operation: (URL) throws -> T
+    ) rethrows -> T {
         let didStartAccess = directory.startAccessingSecurityScopedResource()
         defer {
             if didStartAccess {
@@ -53,22 +96,64 @@ class FileHandler {
     }
     
     static func saveImageDataToDisk(imageData: Data, toUrl: URL) throws {
-        try withWallpaperDirectoryAccess { _ in
+        try saveImageDataToDisk(
+            imageData: imageData,
+            toUrl: toUrl,
+            wallpaperDirectory: wallpaperDirectory()
+        )
+    }
+
+    static func saveImageDataToDisk(
+        imageData: Data,
+        toUrl: URL,
+        wallpaperDirectory: URL
+    ) throws {
+        validationCache.invalidate(toUrl)
+        try withWallpaperDirectoryAccess(at: wallpaperDirectory) { _ in
             try imageData.write(to: toUrl, options: .atomic)
         }
     }
 
     static func loadImageDataFromDisk(at url: URL) throws -> Data {
-        return try withWallpaperDirectoryAccess { _ in
+        try loadImageDataFromDisk(at: url, wallpaperDirectory: wallpaperDirectory())
+    }
+
+    static func loadImageDataFromDisk(at url: URL, wallpaperDirectory: URL) throws -> Data {
+        try withWallpaperDirectoryAccess(at: wallpaperDirectory) { _ in
             try Data(contentsOf: url)
         }
     }
 
     static func wallpaperFileExists(at url: URL) -> Bool {
         return withWallpaperDirectoryAccess { _ in
-            guard FileManager.default.fileExists(atPath: url.path) else { return false }
+            guard FileManager.default.fileExists(atPath: url.path) else {
+                validationCache.invalidate(url)
+                return false
+            }
+            let fileSize = try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize
+            return (fileSize ?? 0) > 0
+        }
+    }
+
+    static func wallpaperFileIsValid(at url: URL, wallpaperDirectory: URL) -> Bool {
+        withWallpaperDirectoryAccess(at: wallpaperDirectory) { _ in
+            guard FileManager.default.fileExists(atPath: url.path) else {
+                validationCache.invalidate(url)
+                return false
+            }
+            let resourceValues = try? url.resourceValues(forKeys: [
+                .contentModificationDateKey,
+                .fileSizeKey
+            ])
+            let fingerprint = (resourceValues?.contentModificationDate, resourceValues?.fileSize)
+            guard (fingerprint.1 ?? 0) > 0 else { return false }
+            if validationCache.isKnownValid(url, fingerprint: fingerprint) {
+                return true
+            }
             guard let source = CGImageSourceCreateWithURL(url as CFURL, nil) else { return false }
-            return CGImageSourceCopyPropertiesAtIndex(source, 0, nil) != nil
+            guard CGImageSourceCopyPropertiesAtIndex(source, 0, nil) != nil else { return false }
+            validationCache.markValid(url, fingerprint: fingerprint)
+            return true
         }
     }
     
@@ -85,6 +170,7 @@ class FileHandler {
     
     static func removeImageFromDisk(imagePath: URL) {
         do {
+            validationCache.invalidate(imagePath)
             return try withWallpaperDirectoryAccess { _ in
                 try FileManager.default.removeItem(at: imagePath)
             }
@@ -117,6 +203,7 @@ class FileHandler {
             let fileURL = directory.appendingPathComponent(fileName, isDirectory: false)
             do {
                 if fileManager.fileExists(atPath: fileURL.path) {
+                    validationCache.invalidate(fileURL)
                     try fileManager.removeItem(at: fileURL)
                 }
             } catch {
@@ -125,15 +212,9 @@ class FileHandler {
         }
     }
     
-    static func savePkgInstallerToDisk(pkgInstaller: Data, appVersion: String) -> URL? {
+    static func savePkgInstallerToDisk(pkgInstaller: Data, appVersion: String) throws -> URL {
         let temporaryDirectoryUrl = pkgInstallerPathUrl(appVersion: appVersion)
-        do {
-            try pkgInstaller.write(to: temporaryDirectoryUrl, options: .atomic)
-        } catch {
-            logger.error("Failed to save pkg installer to disk with error: \(error.localizedDescription, privacy: .public)")
-            return nil
-        }
-        
+        try pkgInstaller.write(to: temporaryDirectoryUrl, options: .atomic)
         return temporaryDirectoryUrl
     }
     

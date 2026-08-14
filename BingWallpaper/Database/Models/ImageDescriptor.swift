@@ -77,6 +77,7 @@ public final class ImageDescriptor: NSManagedObject {
         case invalidEndDate(String)
         case invalidImageURL(String)
         case invalidCopyrightURL(String)
+        case missingEntity
 
         var errorDescription: String? {
             switch self {
@@ -88,6 +89,8 @@ public final class ImageDescriptor: NSManagedObject {
                 return "Invalid Bing image URL: \(value)"
             case .invalidCopyrightURL(let value):
                 return "Invalid Bing copyright URL: \(value)"
+            case .missingEntity:
+                return "The wallpaper database model is missing ImageDescriptor"
             }
         }
     }
@@ -135,7 +138,12 @@ public final class ImageDescriptor: NSManagedObject {
         in managedContext: NSManagedObjectContext
     ) throws -> ImageDescriptor {
         let metadata = try validatedMetadata(from: entry)
-        let entity = NSEntityDescription.entity(forEntityName: "ImageDescriptor", in: managedContext)!
+        guard let entity = NSEntityDescription.entity(
+            forEntityName: "ImageDescriptor",
+            in: managedContext
+        ) else {
+            throw ValidationError.missingEntity
+        }
         let imageDescriptor = ImageDescriptor(entity: entity, insertInto: managedContext)
         imageDescriptor.startDate = metadata.startDate
         imageDescriptor.endDate = metadata.endDate

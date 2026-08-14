@@ -173,10 +173,11 @@ final class MenuController: NSObject {
         if let descriptor = descriptors[safe: selectedDescriptorIndex] {
             if settings.pinnedWallpaperID == descriptor.wallpaperIdentifier {
                 settings.pinnedWallpaperID = nil
+                showNewestImage()
             } else {
                 settings.pinnedWallpaperID = descriptor.wallpaperIdentifier
+                WallpaperManager.shared.setWallpaper(descriptor: descriptor)
             }
-            WallpaperManager.shared.setWallpaper(descriptor: descriptor)
         }
         updateFavoriteMenus()
     }
@@ -491,14 +492,15 @@ final class MenuController: NSObject {
     private func showNewestImage() {
         let downloadedDescriptors = Database.instance.allImageDescriptors()
             .filter { $0.image.isOnDisk() }
-        self.descriptors = downloadedDescriptors
-            .filter { $0.marketCode == settings.bingMarketCode }
         let pinnedDescriptor = settings.pinnedWallpaperID.flatMap { pinnedID in
             downloadedDescriptors.first { $0.wallpaperIdentifier == pinnedID }
         }
         if settings.pinnedWallpaperID != nil, pinnedDescriptor == nil {
             settings.pinnedWallpaperID = nil
         }
+        let visibleMarketCode = pinnedDescriptor?.marketCode ?? settings.bingMarketCode
+        self.descriptors = downloadedDescriptors
+            .filter { $0.marketCode == visibleMarketCode }
         guard descriptors.isEmpty == false else {
             selectedDescriptorIndex = 0
             imageSelectorView?.imageView.image = nil

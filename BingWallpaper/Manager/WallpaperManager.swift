@@ -130,9 +130,20 @@ final class WallpaperManager {
         })?.wallpaperIdentifier
     }
 
+    static func currentWallpaperIdentifiers() -> Set<String> {
+        let descriptors = Database.instance.allImageDescriptors()
+        return Set(NSScreen.screens.compactMap { screen in
+            guard let currentURL = NSWorkspace.shared.desktopImageURL(for: screen) else {
+                return nil
+            }
+            return descriptors.first(where: {
+                wallpaperURL(currentURL, matches: $0.image.downloadPath)
+            })?.wallpaperIdentifier
+        })
+    }
+
     @MainActor
     private func updateWallpaperIfNeeded(forceRefresh: Bool) {
-        guard imageDescriptor != nil else { return }
         let workspace = NSWorkspace.shared
         let mode = settings.wallpaperDisplayMode
         let selectedDisplayIDs = settings.selectedWallpaperDisplayIDs

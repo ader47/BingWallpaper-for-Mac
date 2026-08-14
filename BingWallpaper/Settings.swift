@@ -322,46 +322,21 @@ public class Settings {
         }
     }
     
-    private func keepImageTimeInterval() -> TimeInterval? {
-        let durationInDays: Double?
-        
+    func maximumStoredImageCount() -> Int? {
         switch keepImageDuration {
         case KeepImageDuration.five.rawValue:
-            durationInDays = 5
+            return 5
         case KeepImageDuration.ten.rawValue:
-            durationInDays = 10
+            return 10
         case KeepImageDuration.fifty.rawValue:
-            durationInDays = 50
+            return 50
         case KeepImageDuration.onehundred.rawValue:
-            durationInDays = 100
+            return 100
         case KeepImageDuration.infinite.rawValue:
-            durationInDays = nil
+            return nil
         default:
-            durationInDays = 50
+            return 50
         }
-        
-        guard let durationInDays = durationInDays else {
-            return nil
-        }
-        
-        return durationInDays * 3600.0 * 24.0
-    }
-    
-    func oldestDateToKeep() -> Date? {
-        guard let keepImageTimeInterval = keepImageTimeInterval() else {
-            return nil
-        }
-        return Date().addingTimeInterval(-keepImageTimeInterval)
-    }
-    
-    func oldestDateStringToKeep() -> String? {
-        guard let oldestDateToKeep = oldestDateToKeep() else {
-            return nil
-        }
-        
-        let dateFormatter = DateFormatter()
-        dateFormatter.dateFormat = "yyyyMMdd"
-        return dateFormatter.string(from: oldestDateToKeep)
     }
     
     private static let SM_LOGIN_ENABLED_LEGACY = "SM_LOGIN_ENABLED"

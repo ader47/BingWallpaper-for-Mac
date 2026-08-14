@@ -174,6 +174,20 @@ final class BingMetadataValidationTests: XCTestCase {
 }
 
 final class ImageDirectorySettingsTests: XCTestCase {
+    func testKeepImageSelectionMapsToActualImageCount() {
+        let suiteName = "BingWallpaperTests.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let settings = Settings(defaults: defaults)
+
+        settings.keepImageDuration = KeepImageDuration.five.rawValue
+        XCTAssertEqual(settings.maximumStoredImageCount(), 5)
+        settings.keepImageDuration = KeepImageDuration.onehundred.rawValue
+        XCTAssertEqual(settings.maximumStoredImageCount(), 100)
+        settings.keepImageDuration = KeepImageDuration.infinite.rawValue
+        XCTAssertNil(settings.maximumStoredImageCount())
+    }
+
     func testSecurityScopedBookmarkRoundTrip() throws {
         let suiteName = "BingWallpaperTests.\(UUID().uuidString)"
         let defaults = UserDefaults(suiteName: suiteName)!
@@ -188,6 +202,80 @@ final class ImageDirectorySettingsTests: XCTestCase {
         try settings.setImageDownloadPath(directory)
 
         XCTAssertEqual(settings.imageDownloadPath.standardizedFileURL, directory.standardizedFileURL)
+    }
+}
+
+@MainActor
+final class DatabaseTests: XCTestCase {
+    func testRejectsUpdateWhenEveryMetadataEntryIsInvalid() {
+        let database = Database(inMemory: true)
+        let invalidEntry = makeEntry(startDate: "../../invalid")
+
+        XCTAssertThrowsError(try database.updateImageDescriptors(
+            from: [invalidEntry],
+            marketCode: "en-US"
+        )) { error in
+            guard case Database.Error.noValidMetadata = error else {
+                return XCTFail("Unexpected error: \(error)")
+            }
+        }
+        XCTAssertTrue(database.allImageDescriptors().isEmpty)
+    }
+
+    func testCountCleanupKeepsNewestImagesAndPreservedWallpaper() throws {
+        let database = Database(inMemory: true)
+        let entries = [
+            makeEntry(startDate: "20250101"),
+            makeEntry(startDate: "20250102"),
+            makeEntry(startDate: "20250103"),
+            makeEntry(startDate: "20250104")
+        ]
+        _ = try database.updateImageDescriptors(from: entries, marketCode: "en-US")
+        let preservedID = ImageDescriptor.wallpaperIdentifier(
+            startDate: "20250101",
+            marketCode: "en-US"
+        )
+
+        let deletedFiles = try database.deleteImageDescriptors(
+            exceedingMaximumCount: 2,
+            preserving: [preservedID]
+        )
+
+        XCTAssertEqual(
+            database.allImageDescriptors().map(\.startDate),
+            ["20250101", "20250103", "20250104"]
+        )
+        XCTAssertEqual(deletedFiles, ["en-US_20250102.jpg"])
+    }
+
+    func testValidMetadataIsPersisted() throws {
+        let database = Database(inMemory: true)
+
+        let update = try database.updateImageDescriptors(
+            from: [makeEntry(startDate: "20250102")],
+            marketCode: "zh-CN"
+        )
+
+        XCTAssertEqual(update.descriptors.count, 1)
+        XCTAssertEqual(database.allImageDescriptors().first?.marketCode, "zh-CN")
+    }
+
+    private func makeEntry(startDate: String) -> DownloadManager.ImageEntry {
+        DownloadManager.ImageEntry(
+            url: "/th?id=OHR.Example_1920x1080.jpg",
+            enddate: nextDay(after: startDate),
+            startdate: startDate,
+            copyright: "Example (© Photographer)",
+            copyrightlink: "https://www.bing.com/search?q=example"
+        )
+    }
+
+    private func nextDay(after date: String) -> String {
+        guard ImageDescriptor.isValidBingDate(date),
+              let value = Int(date) else {
+            return "20250102"
+        }
+        return String(value + 1)
     }
 }
 

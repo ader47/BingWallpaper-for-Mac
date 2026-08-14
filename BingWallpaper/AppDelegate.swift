@@ -7,6 +7,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     
     func applicationDidFinishLaunching(_ aNotification: Notification) {
         FileHandler.createWallpaperFolderIfNeeded()
+        _ = Database.instance.persistentContainer
         
         let updateManager = UpdateManager()
         updateManager.delegate = menuController
@@ -14,6 +15,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         
         menuController.updateManager = updateManager
         menuController.setup()
+
+        if let recoveryNotice = Database.instance.recoveryNotice {
+            let alert = NSAlert()
+            alert.alertStyle = .warning
+            alert.messageText = "Wallpaper Database Recovered"
+            alert.informativeText = recoveryNotice
+            alert.addButton(withTitle: "OK")
+            alert.runModal()
+        }
 
         Task {
             await AppUpdateManager.checkForUpdate()

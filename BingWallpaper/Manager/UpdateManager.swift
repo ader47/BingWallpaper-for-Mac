@@ -97,12 +97,23 @@ final class UpdateManager {
     @MainActor
     func start() {
         setupObserver()
-        doUpdateOrScheduleActivity()
+        Task { [weak self] in
+            await self?.doUpdateOrScheduleActivity()
+        }
     }
 
     @MainActor
-    private func doUpdateOrScheduleActivity() {
-        if UpdateScheduleManager.isUpdateNecessary() {
+    private func doUpdateOrScheduleActivity() async {
+        var downloadedMarkets = Set<String?>()
+        for descriptor in Database.instance.allImageDescriptors() {
+            if await descriptor.image.isValidOnDisk() {
+                downloadedMarkets.insert(descriptor.marketCode)
+            }
+        }
+        let isMissingRequiredMarket = settings.requiredBingMarketCodes.contains {
+            downloadedMarkets.contains($0) == false
+        }
+        if UpdateScheduleManager.isUpdateNecessary() || isMissingRequiredMarket {
             update()
             return
         }
@@ -152,7 +163,7 @@ final class UpdateManager {
         // TODO: @2h4u: find entries with same startDate and remove them
         // TODO: @2h4u: probably do this in a migration function in appdelegate
         
-        guard let oldestDateStringToKeep = settings.oldestDateStringToKeep() else { return }
+        guard let maximumCount = settings.maximumStoredImageCount() else { return }
         var preservedIDs = settings.favoriteWallpaperIDs
         if let pinnedWallpaperID = settings.pinnedWallpaperID {
             preservedIDs.insert(pinnedWallpaperID)
@@ -162,9 +173,10 @@ final class UpdateManager {
                 preservedIDs.insert(pinnedWallpaperID)
             }
         }
+        preservedIDs.formUnion(WallpaperManager.currentWallpaperIdentifiers())
         do {
             let deletedFileNames = try Database.instance.deleteImageDescriptors(
-                olderThan: oldestDateStringToKeep,
+                exceedingMaximumCount: maximumCount,
                 preserving: preservedIDs
             )
             FileHandler.deleteImages(fileNames: deletedFileNames)
@@ -235,18 +247,36 @@ final class UpdateManager {
                     return
                 }
 
-                let descriptorUpdate = Database.instance.updateImageDescriptors(
-                    from: imageEntries,
-                    marketCode: marketCode
-                )
-                var marketHasAvailableImage = Database.instance
-                    .allImageDescriptors(marketCode: marketCode)
-                    .contains { $0.image.isOnDisk() }
+                let descriptorUpdate: Database.ImageDescriptorUpdate
+                do {
+                    descriptorUpdate = try Database.instance.updateImageDescriptors(
+                        from: imageEntries,
+                        marketCode: marketCode
+                    )
+                } catch {
+                    logger.error("Failed to store wallpaper metadata for market \(marketCode ?? "automatic", privacy: .public): \(error.localizedDescription, privacy: .public)")
+                    await MainActor.run { [weak self] in
+                        if downloadedAnImage {
+                            self?.delegate?.wallpaperLibraryDidChange(
+                                forceWallpaperRefresh: replacedExistingImage
+                            )
+                        }
+                        self?.finishUpdateWithFailure(stage: .metadata, error: error)
+                    }
+                    return
+                }
+                var validWallpaperIDs = Set<String>()
+                for descriptor in Database.instance.allImageDescriptors(marketCode: marketCode) {
+                    if await descriptor.image.isValidOnDisk() {
+                        validWallpaperIDs.insert(descriptor.wallpaperIdentifier)
+                    }
+                }
+                var marketHasAvailableImage = validWallpaperIDs.isEmpty == false
                 var marketErrors = [Error]()
                 let missingDescriptors = descriptorUpdate.descriptors
                     .filter {
                         descriptorUpdate.wallpaperIDsRequiringDownload.contains($0.wallpaperIdentifier) ||
-                            $0.image.isOnDisk() == false
+                            validWallpaperIDs.contains($0.wallpaperIdentifier) == false
                     }
 
                 for descriptor in missingDescriptors {
@@ -392,6 +422,8 @@ final class UpdateManager {
 
     @MainActor
     @objc func receiveWakeNote(note: NSNotification) {
-        doUpdateOrScheduleActivity()
+        Task { [weak self] in
+            await self?.doUpdateOrScheduleActivity()
+        }
     }
 }
