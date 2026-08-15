@@ -14,13 +14,19 @@ public class UpdateScheduleManager {
     private init() { }
     
     public static func isUpdateNecessary() -> Bool {
-        return nextFetchTimeInterval() == 0
+        return isUpdateNecessary(lastUpdate: Settings().lastUpdate)
     }
     
     public static func nextFetchTimeInterval() -> TimeInterval {
-        let lastUpdate = Settings().lastUpdate
-        return max(0, FETCH_INTERVAL - abs(lastUpdate.timeIntervalSinceNow))
+        return nextFetchTimeInterval(lastUpdate: Settings().lastUpdate)
+    }
+
+    static func isUpdateNecessary(lastUpdate: Date, now: Date = Date()) -> Bool {
+        return nextFetchTimeInterval(lastUpdate: lastUpdate, now: now) == 0
+    }
+
+    static func nextFetchTimeInterval(lastUpdate: Date, now: Date = Date()) -> TimeInterval {
+        return max(0, FETCH_INTERVAL - abs(lastUpdate.timeIntervalSince(now)))
     }
         
 }
-

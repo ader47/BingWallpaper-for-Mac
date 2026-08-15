@@ -1,13 +1,21 @@
 import Cocoa
 
-// TODO: @2h4u create and add icon (app icon and menubar icon)
-
 @main
-class AppDelegate: NSObject, NSApplicationDelegate {
+@MainActor
+final class AppDelegate: NSObject, NSApplicationDelegate {
     private let menuController = MenuController()
+    private var isRunningUnitTests: Bool {
+        ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil
+    }
     
     func applicationDidFinishLaunching(_ aNotification: Notification) {
+        guard !isRunningUnitTests else { return }
+
         FileHandler.createWallpaperFolderIfNeeded()
+        _ = Database.instance.persistentContainer
+        let existingDescriptors = Database.instance.allImageDescriptors()
+        FileHandler.migrateLegacyAutomaticWallpaperFiles(existingDescriptors)
+        Settings().migrateLegacyAutomaticWallpaperIdentifiers(using: existingDescriptors)
         
         let updateManager = UpdateManager()
         updateManager.delegate = menuController
@@ -16,12 +24,23 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         menuController.updateManager = updateManager
         menuController.setup()
 
+        if let recoveryNotice = Database.instance.recoveryNotice {
+            let alert = NSAlert()
+            alert.alertStyle = .warning
+            alert.messageText = "Wallpaper Database Recovered"
+            alert.informativeText = recoveryNotice
+            alert.addButton(withTitle: "OK")
+            alert.runModal()
+        }
+
         Task {
             await AppUpdateManager.checkForUpdate()
         }
     }
     
     func applicationDidBecomeActive(_ notification: Notification) {
+        guard !isRunningUnitTests else { return }
+
         menuController.showSettingsWc(sender: nil)
     }
     

@@ -7,6 +7,7 @@
 
 import Foundation
 import AppKit
+import CryptoKit
 import OSLog
 
 private let logger = Logger(
@@ -15,20 +16,101 @@ private let logger = Logger(
 )
 
 class AppUpdateManager {
-    
-    private static let githubLatestReleaseUrl = URL(string: "https://github.com/2h4u/BingWallpaper-for-Mac/releases/latest")!
-    private static let githubExpandedAssetsPrefix = "https://github.com/2h4u/BingWallpaper-for-Mac/releases/expanded_assets/"
-    private static let githubDomain = "https://github.com"
-    
+
+    private enum UpdateError: LocalizedError {
+        case invalidRepository
+        case missingInstallerAssets(String)
+        case checksumMismatch(String)
+
+        var errorDescription: String? {
+            switch self {
+            case .invalidRepository:
+                return "The configured GitHub release repository is invalid."
+            case .missingInstallerAssets(let version):
+                return "Release \(version) does not include a signed installer and its SHA-256 checksum."
+            case .checksumMismatch(let assetName):
+                return "The downloaded checksum for \(assetName) did not match."
+            }
+        }
+    }
+
+    private static let defaultReleaseRepository = "2h4u/BingWallpaper-for-Mac"
+
+    private struct GitHubRelease: Decodable {
+        let tagName: String
+        let assets: [GitHubAsset]
+
+        enum CodingKeys: String, CodingKey {
+            case tagName = "tag_name"
+            case assets
+        }
+    }
+
+    private struct GitHubAsset: Decodable {
+        let name: String
+        let browserDownloadUrl: URL
+
+        enum CodingKeys: String, CodingKey {
+            case name
+            case browserDownloadUrl = "browser_download_url"
+        }
+    }
+
     static func currentAppVersion() -> String {
-        return Bundle.main.infoDictionary!["CFBundleShortVersionString"] as! String
+        return Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "0.0.0"
     }
-    
+
+    static func releaseRepository(bundle: Bundle = .main) -> String {
+        guard let repository = bundle.object(forInfoDictionaryKey: "BingWallpaperReleaseRepository") as? String,
+              isValidReleaseRepository(repository) else {
+            return defaultReleaseRepository
+        }
+        return repository
+    }
+
+    static func latestReleaseAPIURL(repository: String) -> URL? {
+        guard isValidReleaseRepository(repository) else {
+            return nil
+        }
+        var components = URLComponents()
+        components.scheme = "https"
+        components.host = "api.github.com"
+        components.path = "/repos/\(repository)/releases/latest"
+        return components.url
+    }
+
+    private static func isValidReleaseRepository(_ repository: String) -> Bool {
+        let components = repository.split(separator: "/", omittingEmptySubsequences: false)
+        guard components.count == 2 else { return false }
+        return components.allSatisfy { component in
+            component.isEmpty == false &&
+                component.allSatisfy { character in
+                    character.isASCII &&
+                        (character.isLetter || character.isNumber || "_.-".contains(character))
+                } &&
+                component.contains(where: { $0 != "." })
+        }
+    }
+
+    private static func fetchLatestReleaseFromGithub() async throws -> GitHubRelease {
+        guard let latestReleaseURL = latestReleaseAPIURL(repository: releaseRepository()) else {
+            throw UpdateError.invalidRepository
+        }
+        return try await DownloadManager.downloadJson(
+            GitHubRelease.self,
+            from: latestReleaseURL,
+            headers: [
+                "Accept": "application/vnd.github+json",
+                "User-Agent": "BingWallpaper/\(currentAppVersion())",
+                "X-GitHub-Api-Version": "2022-11-28"
+            ]
+        )
+    }
+
     static func fetchLatestAppVersionFromGithub() async -> String? {
-        let latestHtmlHeaders = await DownloadManager.downloadHtmlHeaders(from: githubLatestReleaseUrl)
-        return latestHtmlHeaders?.url?.lastPathComponent
+        try? await fetchLatestReleaseFromGithub().tagName
     }
-    
+
     private static func newVersionAvailable(_ currentAppVersion: String, _ latestAppVersion: String) -> Bool {
         let currentAppVersion = currentAppVersion.replacingOccurrences(of: "v", with: "")
         let latestAppVersion = latestAppVersion.replacingOccurrences(of: "v", with: "")
@@ -36,10 +118,18 @@ class AppUpdateManager {
     }
     
     static func checkForUpdate(notifyUserAboutNoNewVersion:Bool = false) async {
-        guard let latestGithubAppVersion = await fetchLatestAppVersionFromGithub() else {
-            logger.error("Failed to fetch latest app version from github")
+        let latestRelease: GitHubRelease
+        do {
+            latestRelease = try await fetchLatestReleaseFromGithub()
+        } catch {
+            logger.error("Failed to fetch the latest GitHub release: \(error.localizedDescription, privacy: .public)")
+            if notifyUserAboutNoNewVersion {
+                await showUpdateFailureDialog(error)
+            }
             return
         }
+
+        let latestGithubAppVersion = latestRelease.tagName
         
         let currentAppVersion = currentAppVersion()
         
@@ -52,45 +142,56 @@ class AppUpdateManager {
             return
         }
         
-        if let pkgInstallerPathUrl = FileHandler.pkgInstallerAlreadyDownloaded(appVersion: latestGithubAppVersion) {
-            if await showShouldUpdateNowDialog(currentAppVersion: currentAppVersion, latestAppVersion: latestGithubAppVersion) == true {
+        guard await showShouldUpdateNowDialog(
+            currentAppVersion: currentAppVersion,
+            latestAppVersion: latestGithubAppVersion
+        ) else {
+            return
+        }
+
+        do {
+            let pkgInstaller = try await downloadVerifiedInstaller(from: latestRelease)
+            let pkgInstallerPathUrl = try FileHandler.savePkgInstallerToDisk(
+                pkgInstaller: pkgInstaller,
+                appVersion: latestGithubAppVersion
+            )
+            _ = await MainActor.run {
                 NSWorkspace.shared.open(pkgInstallerPathUrl)
             }
-            return
-        }
-        
-        
-        guard let pkgInstaller = await downloadLatestInstallerFromGithub(latestGithubAppVersion: latestGithubAppVersion) else {
-            logger.error("Failed to download latest app installer from github")
-            return
-        }
-        
-        guard let pkgInstallerPathUrl = FileHandler.savePkgInstallerToDisk(pkgInstaller: pkgInstaller, appVersion: latestGithubAppVersion) else {
-            return
-        }
-        
-        if await showShouldUpdateNowDialog(currentAppVersion: currentAppVersion, latestAppVersion: latestGithubAppVersion) == true {
-            NSWorkspace.shared.open(pkgInstallerPathUrl)
+        } catch {
+            logger.error("Failed to download and verify the latest app installer: \(error.localizedDescription, privacy: .public)")
+            await showUpdateFailureDialog(error)
         }
     }
-    
-    static func downloadLatestInstallerFromGithub(latestGithubAppVersion: String) async -> Data? {
-        var githubExpandedAssetsUrl = URL(string: githubExpandedAssetsPrefix)!
-        githubExpandedAssetsUrl.appendPathComponent(latestGithubAppVersion)
-        
-        guard let html = await DownloadManager.downloadHtml(from: githubExpandedAssetsUrl) else { return nil }
-        
-        guard let aHref = html.split(separator: "\n").filter({ line in line.contains(".pkg") && line.contains("/\(latestGithubAppVersion)/")}).first else {
-            assertionFailure("Failed to extract pkg link from latest github release website: \(html)")
-            return nil
-         }
-        
-        let newAppVersionDownloadPostfix = aHref.components(separatedBy: "href=\"").dropFirst().first!.components(separatedBy: "\"").first!
-        
-        var newAppVersionDownloadUrl = URL(string: githubDomain)!
-        newAppVersionDownloadUrl.appendPathComponent(newAppVersionDownloadPostfix)
 
-        return try? await DownloadManager.downloadBinary(from: newAppVersionDownloadUrl)
+    private static func downloadVerifiedInstaller(from release: GitHubRelease) async throws -> Data {
+        guard let packageAsset = release.assets.first(where: { $0.name.hasSuffix(".pkg") }),
+              let checksumAsset = release.assets.first(where: { $0.name == packageAsset.name + ".sha256" }) else {
+            throw UpdateError.missingInstallerAssets(release.tagName)
+        }
+
+        async let packageData = DownloadManager.downloadPackage(from: packageAsset.browserDownloadUrl)
+        async let checksumText = DownloadManager.downloadText(from: checksumAsset.browserDownloadUrl)
+        let (installer, checksum) = try await (packageData, checksumText)
+        guard verifyChecksum(packageData: installer, checksumText: checksum) else {
+            throw UpdateError.checksumMismatch(packageAsset.name)
+        }
+        return installer
+    }
+
+    static func sha256Hex(for data: Data) -> String {
+        return SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
+    }
+
+    static func verifyChecksum(packageData: Data, checksumText: String) -> Bool {
+        guard let expectedChecksum = checksumText
+            .split(whereSeparator: { $0.isWhitespace })
+            .first?
+            .lowercased(),
+              expectedChecksum.count == 64 else {
+            return false
+        }
+        return sha256Hex(for: packageData) == expectedChecksum
     }
     
     @MainActor
@@ -100,7 +201,7 @@ class AppUpdateManager {
         let alert = NSAlert()
         alert.messageText = "New version of BingWallpaper available"
         alert.informativeText = "Do you want to update now?\nCurrent version: \(currentAppVersion)\nNew version: \(latestAppVersion)"
-        let updateButton = alert.addButton(withTitle: "Upate")
+        let updateButton = alert.addButton(withTitle: "Update")
         alert.addButton(withTitle: "Later")
         alert.alertStyle = .informational
         
@@ -119,6 +220,16 @@ class AppUpdateManager {
         
         alert.window.defaultButtonCell = updateButton.cell as? NSButtonCell
         
+        alert.runModal()
+    }
+
+    @MainActor
+    private static func showUpdateFailureDialog(_ error: Swift.Error) {
+        let alert = NSAlert()
+        alert.alertStyle = .warning
+        alert.messageText = "Couldn’t Check for Updates"
+        alert.informativeText = error.localizedDescription
+        alert.addButton(withTitle: "OK")
         alert.runModal()
     }
     

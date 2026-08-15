@@ -9,9 +9,131 @@ private let logger = Logger(
 
 protocol SettingsVcDelegate: AnyObject {
     @MainActor
+    func bingMarketDidChange()
+    @MainActor
+    func wallpaperDisplaySelectionDidChange()
+    @MainActor
+    func wallpaperStorageDidChange()
+    @MainActor
+    func wallpaperDatabaseDidReset()
+    @MainActor
     func showMenuBarIcon()
     @MainActor
     func hideMenuBarIcon()
+}
+
+private struct DisplayWallpaperOption {
+    let wallpaperID: String
+    let marketCode: String?
+    let title: String
+}
+
+@MainActor
+private final class DisplayProfileRowController: NSObject {
+    static let inheritSelection = "__inherit_global_wallpaper__"
+    static let latestSelection = "__follow_latest_wallpaper__"
+
+    let display: WallpaperDisplayInfo
+    let marketSelector: NSPopUpButton
+    let wallpaperSelector = NSPopUpButton(frame: .zero, pullsDown: false)
+
+    private let globalMarketCode: String?
+    private let wallpaperOptions: [DisplayWallpaperOption]
+
+    init(
+        display: WallpaperDisplayInfo,
+        marketSelector: NSPopUpButton,
+        profile: WallpaperDisplayProfile,
+        globalMarketCode: String?,
+        wallpaperOptions: [DisplayWallpaperOption]
+    ) {
+        self.display = display
+        self.marketSelector = marketSelector
+        self.globalMarketCode = globalMarketCode
+        self.wallpaperOptions = wallpaperOptions
+        super.init()
+
+        marketSelector.target = self
+        marketSelector.action = #selector(marketSelectionDidChange(_:))
+        rebuildWallpaperSelector(selecting: Self.selectionValue(for: profile))
+    }
+
+    var wallpaperSelection: String {
+        wallpaperSelector.selectedItem?.representedObject as? String
+            ?? Self.latestSelection
+    }
+
+    private static func selectionValue(for profile: WallpaperDisplayProfile) -> String {
+        switch profile.pinMode {
+        case .inherit:
+            return inheritSelection
+        case .followLatest:
+            return latestSelection
+        case .pinned:
+            return profile.pinnedWallpaperID ?? latestSelection
+        }
+    }
+
+    @objc private func marketSelectionDidChange(_ sender: NSPopUpButton) {
+        rebuildWallpaperSelector(selecting: Self.latestSelection)
+    }
+
+    private func effectiveMarketCode() -> String? {
+        let value = marketSelector.selectedItem?.representedObject as? String ?? "inherit"
+        switch value {
+        case "inherit":
+            return globalMarketCode
+        case "automatic":
+            return nil
+        default:
+            return BingMarketOption.supportedCodes.contains(value) ? value : globalMarketCode
+        }
+    }
+
+    private func rebuildWallpaperSelector(selecting selection: String) {
+        wallpaperSelector.removeAllItems()
+        addOption(
+            title: "Inherit Global Wallpaper",
+            value: Self.inheritSelection
+        )
+        addOption(
+            title: "Follow Latest in This Region",
+            value: Self.latestSelection
+        )
+
+        let matchingOptions = wallpaperOptions.filter {
+            $0.marketCode == effectiveMarketCode()
+        }
+        if matchingOptions.isEmpty {
+            let unavailableItem = NSMenuItem(
+                title: "No downloaded wallpapers for this region",
+                action: nil,
+                keyEquivalent: ""
+            )
+            unavailableItem.isEnabled = false
+            wallpaperSelector.menu?.addItem(.separator())
+            wallpaperSelector.menu?.addItem(unavailableItem)
+        } else {
+            wallpaperSelector.menu?.addItem(.separator())
+            for option in matchingOptions {
+                addOption(title: option.title, value: option.wallpaperID)
+            }
+        }
+
+        let selectedItem = wallpaperSelector.itemArray.first {
+            ($0.representedObject as? String) == selection
+        } ?? wallpaperSelector.itemArray.first {
+            ($0.representedObject as? String) == Self.latestSelection
+        }
+        wallpaperSelector.select(selectedItem)
+        wallpaperSelector.toolTip = selectedItem?.title
+    }
+
+    private func addOption(title: String, value: String) {
+        let item = NSMenuItem(title: title, action: nil, keyEquivalent: "")
+        item.representedObject = value
+        wallpaperSelector.menu?.addItem(item)
+    }
 }
 
 class SettingsVc: NSViewController {
@@ -20,6 +142,13 @@ class SettingsVc: NSViewController {
     @IBOutlet var imagePathButton: NSButton!
     @IBOutlet weak var keepImagesSlider: NSSlider!
     @IBOutlet weak var keepImagesTextField: NSTextField!
+
+    private let bingMarketLabel = NSTextField(labelWithString: "Bing region:")
+    private let bingMarketPopUpButton = NSPopUpButton(frame: .zero, pullsDown: false)
+    private let wallpaperDisplayLabel = NSTextField(labelWithString: "Apply wallpaper to:")
+    private let wallpaperDisplayPopUpButton = NSPopUpButton(frame: .zero, pullsDown: false)
+    private let displayProfilesLabel = NSTextField(labelWithString: "Per-display profiles:")
+    private let displayProfilesButton = NSButton(title: "Configure…", target: nil, action: nil)
     
     private let settings = Settings()
     weak var delegate: SettingsVcDelegate?
@@ -35,11 +164,16 @@ class SettingsVc: NSViewController {
         imagePathButton.toolTip = imagePathButton.title
         keepImagesSlider.integerValue = settings.keepImageDuration
         setKeepImagesText()
+        setupBingMarketSelector()
+        setupWallpaperDisplaySelector()
+        setupDisplayProfilesButton()
     }
 
     override func viewWillAppear() {
         super.viewWillAppear()
         refreshLaunchAtLoginCheckbox()
+        refreshWallpaperDisplaySelector()
+        refreshDisplayProfilesButton()
     }
 
     // MARK: - Actions
@@ -82,10 +216,50 @@ class SettingsVc: NSViewController {
         
         if dialog.runModal() == NSApplication.ModalResponse.OK {
             guard let result = dialog.url else { return }
-            settings.imageDownloadPath = result
-            imagePathButton.title = result.path
-            imagePathButton.toolTip = result.path
+            do {
+                try settings.setImageDownloadPath(result)
+                imagePathButton.title = result.path
+                imagePathButton.toolTip = result.path
+                delegate?.wallpaperStorageDidChange()
+                updateManager?.update()
+            } catch {
+                logger.error("Failed to save image directory permission: \(error.localizedDescription, privacy: .public)")
+                presentImagePathError(error)
+            }
         }
+    }
+
+    @objc private func bingMarketAction(_ sender: NSPopUpButton) {
+        let oldMarketCode = settings.bingMarketCode
+        let newMarketCode = sender.selectedItem?.representedObject as? String
+        settings.bingMarketCode = newMarketCode
+
+        guard oldMarketCode != settings.bingMarketCode else { return }
+        delegate?.bingMarketDidChange()
+        updateManager?.update()
+    }
+
+    @objc private func wallpaperDisplayAction(_ sender: NSPopUpButton) {
+        let oldMode = settings.wallpaperDisplayMode
+        guard let rawValue = sender.selectedItem?.representedObject as? String,
+              let newMode = WallpaperDisplayMode(rawValue: rawValue) else {
+            refreshWallpaperDisplaySelector()
+            return
+        }
+
+        if newMode == .selected, !presentWallpaperDisplaySelection() {
+            selectWallpaperDisplayMode(oldMode)
+            return
+        }
+
+        settings.wallpaperDisplayMode = newMode
+        refreshWallpaperDisplaySelector()
+        guard oldMode != newMode || newMode == .selected else { return }
+        delegate?.wallpaperDisplaySelectionDidChange()
+    }
+
+    @objc private func displayProfilesAction(_ sender: NSButton) {
+        presentDisplayProfileConfiguration()
     }
     
     @IBAction func keepImagesSliderAction(_ sender: NSSlider) {
@@ -95,12 +269,11 @@ class SettingsVc: NSViewController {
     
     @IBAction func resetDatabaseButtonAction(_ sender: NSButton) {
         logger.info("Resetting Database...")
-        let dateFormatter = DateFormatter()
-        dateFormatter.dateFormat = "YYYYMMdd"
-        let oldestDateStringToKeep = dateFormatter.string(from: Date())
-        
         do {
-           try Database.instance.deleteImageDescriptors(olderThan: oldestDateStringToKeep)
+            try Database.instance.deleteAllImageDescriptors()
+            settings.resetWallpaperLibrarySelections()
+            delegate?.wallpaperDatabaseDidReset()
+            updateManager?.update()
         } catch let error {
             logger.error("Failed resetting Database: \(error.localizedDescription, privacy: .public)")
             let alert = NSAlert()
@@ -111,14 +284,394 @@ class SettingsVc: NSViewController {
             alert.window.defaultButtonCell = updateButton.cell as? NSButtonCell
             alert.runModal()
         }
-        
-        updateManager?.update()
     }
     
     // MARK: - Private
 
     private func refreshLaunchAtLoginCheckbox() {
         launchAtLoginCheckBox.state = settings.launchAtLogin ? .on : .off
+    }
+
+    private func setupBingMarketSelector() {
+        let options = BingMarketOption.all
+        bingMarketPopUpButton.removeAllItems()
+        for option in options {
+            let item = NSMenuItem(title: option.title, action: nil, keyEquivalent: "")
+            item.representedObject = option.code
+            bingMarketPopUpButton.menu?.addItem(item)
+        }
+
+        if let selectedIndex = options.firstIndex(where: { $0.code == settings.bingMarketCode }) {
+            bingMarketPopUpButton.selectItem(at: selectedIndex)
+        }
+        bingMarketPopUpButton.target = self
+        bingMarketPopUpButton.action = #selector(bingMarketAction(_:))
+
+        bingMarketLabel.translatesAutoresizingMaskIntoConstraints = false
+        bingMarketPopUpButton.translatesAutoresizingMaskIntoConstraints = false
+        view.addSubview(bingMarketLabel)
+        view.addSubview(bingMarketPopUpButton)
+
+        // Insert the market row between the menu-bar preference and image path.
+        if let oldImageTopConstraint = view.constraints.first(where: {
+            ($0.firstItem as? NSView) === imagePathButton &&
+            $0.firstAttribute == .top &&
+            ($0.secondItem as? NSView) === hideMenuBarIconCheckBox &&
+            $0.secondAttribute == .bottom
+        }) {
+            NSLayoutConstraint.deactivate([oldImageTopConstraint])
+        }
+
+        NSLayoutConstraint.activate([
+            bingMarketPopUpButton.topAnchor.constraint(equalTo: hideMenuBarIconCheckBox.bottomAnchor, constant: 12),
+            bingMarketPopUpButton.leadingAnchor.constraint(equalTo: imagePathButton.leadingAnchor),
+            bingMarketPopUpButton.widthAnchor.constraint(equalTo: imagePathButton.widthAnchor),
+            imagePathButton.topAnchor.constraint(equalTo: bingMarketPopUpButton.bottomAnchor, constant: 12),
+            bingMarketLabel.trailingAnchor.constraint(equalTo: bingMarketPopUpButton.leadingAnchor, constant: -8),
+            bingMarketLabel.centerYAnchor.constraint(equalTo: bingMarketPopUpButton.centerYAnchor)
+        ])
+
+        preferredContentSize = NSSize(width: view.frame.width, height: view.frame.height + 40)
+    }
+
+    private func setupWallpaperDisplaySelector() {
+        wallpaperDisplayLabel.translatesAutoresizingMaskIntoConstraints = false
+        wallpaperDisplayPopUpButton.translatesAutoresizingMaskIntoConstraints = false
+        wallpaperDisplayPopUpButton.target = self
+        wallpaperDisplayPopUpButton.action = #selector(wallpaperDisplayAction(_:))
+        view.addSubview(wallpaperDisplayLabel)
+        view.addSubview(wallpaperDisplayPopUpButton)
+        refreshWallpaperDisplaySelector()
+
+        if let imageTopConstraint = view.constraints.first(where: {
+            ($0.firstItem as? NSView) === imagePathButton &&
+            $0.firstAttribute == .top &&
+            ($0.secondItem as? NSView) === bingMarketPopUpButton &&
+            $0.secondAttribute == .bottom
+        }) {
+            NSLayoutConstraint.deactivate([imageTopConstraint])
+        }
+
+        NSLayoutConstraint.activate([
+            wallpaperDisplayPopUpButton.topAnchor.constraint(equalTo: bingMarketPopUpButton.bottomAnchor, constant: 12),
+            wallpaperDisplayPopUpButton.leadingAnchor.constraint(equalTo: imagePathButton.leadingAnchor),
+            wallpaperDisplayPopUpButton.widthAnchor.constraint(equalTo: imagePathButton.widthAnchor),
+            imagePathButton.topAnchor.constraint(equalTo: wallpaperDisplayPopUpButton.bottomAnchor, constant: 12),
+            wallpaperDisplayLabel.trailingAnchor.constraint(equalTo: wallpaperDisplayPopUpButton.leadingAnchor, constant: -8),
+            wallpaperDisplayLabel.centerYAnchor.constraint(equalTo: wallpaperDisplayPopUpButton.centerYAnchor)
+        ])
+
+        preferredContentSize = NSSize(width: preferredContentSize.width, height: preferredContentSize.height + 40)
+    }
+
+    private func setupDisplayProfilesButton() {
+        displayProfilesLabel.translatesAutoresizingMaskIntoConstraints = false
+        displayProfilesButton.translatesAutoresizingMaskIntoConstraints = false
+        displayProfilesButton.target = self
+        displayProfilesButton.action = #selector(displayProfilesAction(_:))
+        displayProfilesButton.alignment = .left
+        view.addSubview(displayProfilesLabel)
+        view.addSubview(displayProfilesButton)
+        refreshDisplayProfilesButton()
+
+        if let imageTopConstraint = view.constraints.first(where: {
+            ($0.firstItem as? NSView) === imagePathButton &&
+            $0.firstAttribute == .top &&
+            ($0.secondItem as? NSView) === wallpaperDisplayPopUpButton &&
+            $0.secondAttribute == .bottom
+        }) {
+            NSLayoutConstraint.deactivate([imageTopConstraint])
+        }
+
+        NSLayoutConstraint.activate([
+            displayProfilesButton.topAnchor.constraint(equalTo: wallpaperDisplayPopUpButton.bottomAnchor, constant: 12),
+            displayProfilesButton.leadingAnchor.constraint(equalTo: imagePathButton.leadingAnchor),
+            displayProfilesButton.widthAnchor.constraint(equalTo: imagePathButton.widthAnchor),
+            imagePathButton.topAnchor.constraint(equalTo: displayProfilesButton.bottomAnchor, constant: 12),
+            displayProfilesLabel.trailingAnchor.constraint(equalTo: displayProfilesButton.leadingAnchor, constant: -8),
+            displayProfilesLabel.centerYAnchor.constraint(equalTo: displayProfilesButton.centerYAnchor)
+        ])
+
+        preferredContentSize = NSSize(width: preferredContentSize.width, height: preferredContentSize.height + 40)
+    }
+
+    private func refreshDisplayProfilesButton() {
+        let count = settings.wallpaperDisplayProfiles.count
+        displayProfilesButton.title = count == 0
+            ? "Configure…"
+            : "Configure (\(count))…"
+    }
+
+    private func refreshWallpaperDisplaySelector() {
+        let selectedCount = settings.selectedWallpaperDisplayIDs.count
+        wallpaperDisplayPopUpButton.removeAllItems()
+        for mode in WallpaperDisplayMode.allCases {
+            let title: String
+            if mode == .selected, selectedCount > 0 {
+                title = "Selected Displays (\(selectedCount))…"
+            } else {
+                title = mode.title
+            }
+            let item = NSMenuItem(title: title, action: nil, keyEquivalent: "")
+            item.representedObject = mode.rawValue
+            wallpaperDisplayPopUpButton.menu?.addItem(item)
+        }
+        selectWallpaperDisplayMode(settings.wallpaperDisplayMode)
+    }
+
+    private func selectWallpaperDisplayMode(_ mode: WallpaperDisplayMode) {
+        guard let item = wallpaperDisplayPopUpButton.itemArray.first(where: {
+            ($0.representedObject as? String) == mode.rawValue
+        }) else { return }
+        wallpaperDisplayPopUpButton.select(item)
+    }
+
+    private func presentWallpaperDisplaySelection() -> Bool {
+        let displays = WallpaperManager.connectedDisplays()
+        guard !displays.isEmpty else {
+            let alert = NSAlert()
+            alert.messageText = "No displays are available"
+            alert.informativeText = "Connect a display and try again."
+            alert.alertStyle = .warning
+            alert.addButton(withTitle: "OK")
+            alert.runModal()
+            return false
+        }
+
+        let previouslySelected = settings.selectedWallpaperDisplayIDs
+        let initiallySelected: Set<String>
+        if previouslySelected.isEmpty {
+            initiallySelected = Set(displays.filter(\.isMain).map(\.identifier))
+        } else {
+            initiallySelected = previouslySelected
+        }
+
+        let stackView = NSStackView()
+        stackView.orientation = .vertical
+        stackView.alignment = .leading
+        stackView.spacing = 8
+        var checkBoxes = [NSButton]()
+        for display in displays {
+            let checkBox = NSButton(checkboxWithTitle: display.title, target: nil, action: nil)
+            checkBox.state = initiallySelected.contains(display.identifier) ? .on : .off
+            checkBoxes.append(checkBox)
+            stackView.addArrangedSubview(checkBox)
+        }
+        stackView.frame = NSRect(x: 0, y: 0, width: 420, height: max(28, CGFloat(displays.count) * 26))
+
+        let alert = NSAlert()
+        alert.messageText = "Choose displays"
+        alert.informativeText = "BingWallpaper will update only the selected displays. Disconnected displays remain selected and will resume when reconnected."
+        alert.alertStyle = .informational
+        alert.icon = displayConfigurationIcon()
+        alert.accessoryView = stackView
+        alert.addButton(withTitle: "Apply")
+        alert.addButton(withTitle: "Cancel")
+        guard alert.runModal() == .alertFirstButtonReturn else { return false }
+
+        let connectedIDs = Set(displays.map(\.identifier))
+        let disconnectedSelections = previouslySelected.subtracting(connectedIDs)
+        let checkedIDs = Set(zip(displays, checkBoxes).compactMap { display, checkBox in
+            checkBox.state == .on ? display.identifier : nil
+        })
+        let newSelection = disconnectedSelections.union(checkedIDs)
+        guard !newSelection.isEmpty else {
+            let emptyAlert = NSAlert()
+            emptyAlert.messageText = "Select at least one display"
+            emptyAlert.alertStyle = .warning
+            emptyAlert.addButton(withTitle: "OK")
+            emptyAlert.runModal()
+            return false
+        }
+
+        settings.selectedWallpaperDisplayIDs = newSelection
+        return true
+    }
+
+    private func presentDisplayProfileConfiguration() {
+        let displays = WallpaperManager.connectedDisplays()
+        guard displays.isEmpty == false else {
+            let alert = NSAlert()
+            alert.messageText = "No displays are available"
+            alert.informativeText = "Connect a display and try again."
+            alert.alertStyle = .warning
+            alert.addButton(withTitle: "OK")
+            alert.runModal()
+            return
+        }
+
+        let descriptors = Database.instance.allImageDescriptors()
+            .filter { $0.image.isOnDisk() }
+        let wallpaperOptions = descriptors
+            .sorted(by: >)
+            .map { descriptor in
+                let info = descriptor.imageInfo
+                return DisplayWallpaperOption(
+                    wallpaperID: descriptor.wallpaperIdentifier,
+                    marketCode: descriptor.marketCode,
+                    title: "\(info.date) — \(info.title)"
+                )
+            }
+        var controls = [DisplayProfileRowController]()
+        var rows = [[NSView]]()
+        rows.append([
+            profileHeader("Display"),
+            profileHeader("Bing Region"),
+            profileHeader("Wallpaper")
+        ])
+        let profiles = settings.wallpaperDisplayProfiles
+        for display in displays {
+            let profile = profiles[display.identifier] ?? WallpaperDisplayProfile()
+            let marketSelector = displayMarketSelector(for: profile)
+            let rowController = DisplayProfileRowController(
+                display: display,
+                marketSelector: marketSelector,
+                profile: profile,
+                globalMarketCode: settings.bingMarketCode,
+                wallpaperOptions: wallpaperOptions
+            )
+            let displayLabel = NSTextField(labelWithString: display.title)
+            displayLabel.lineBreakMode = .byTruncatingTail
+            displayLabel.toolTip = display.title
+            rows.append([displayLabel, marketSelector, rowController.wallpaperSelector])
+            controls.append(rowController)
+        }
+
+        let grid = NSGridView(views: rows)
+        grid.rowSpacing = 8
+        grid.columnSpacing = 10
+        grid.column(at: 0).width = 230
+        grid.column(at: 1).width = 250
+        grid.column(at: 2).width = 310
+        grid.frame = NSRect(
+            x: 0,
+            y: 0,
+            width: 810,
+            height: CGFloat(rows.count) * 34
+        )
+
+        let accessoryView: NSView
+        if rows.count > 6 {
+            let scrollView = NSScrollView(frame: NSRect(x: 0, y: 0, width: 810, height: 220))
+            scrollView.documentView = grid
+            scrollView.hasVerticalScroller = true
+            scrollView.drawsBackground = false
+            accessoryView = scrollView
+        } else {
+            accessoryView = grid
+        }
+
+        let alert = NSAlert()
+        alert.messageText = "Configure Displays"
+        alert.informativeText = "Each display can inherit the global wallpaper, follow the latest image in its own Bing region, or use a specific downloaded wallpaper. Disconnected display profiles remain saved."
+        alert.alertStyle = .informational
+        alert.icon = displayConfigurationIcon()
+        alert.accessoryView = accessoryView
+        alert.addButton(withTitle: "Apply")
+        alert.addButton(withTitle: "Cancel")
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+
+        var updatedProfiles = profiles
+        for control in controls {
+            var profile = updatedProfiles[control.display.identifier]
+                ?? WallpaperDisplayProfile()
+            applyMarketSelection(control.marketSelector, to: &profile)
+            switch control.wallpaperSelection {
+            case DisplayProfileRowController.inheritSelection:
+                profile.pinMode = .inherit
+                profile.pinnedWallpaperID = nil
+            case DisplayProfileRowController.latestSelection:
+                profile.pinMode = .followLatest
+                profile.pinnedWallpaperID = nil
+            case let wallpaperID:
+                let effectiveMarketCode = profile.effectiveMarketCode(
+                    globalMarketCode: settings.bingMarketCode
+                )
+                if descriptors.contains(where: {
+                    $0.wallpaperIdentifier == wallpaperID &&
+                        $0.marketCode == effectiveMarketCode
+                }) {
+                    profile.pinMode = .pinned
+                    profile.pinnedWallpaperID = wallpaperID
+                } else {
+                    profile.pinMode = .followLatest
+                    profile.pinnedWallpaperID = nil
+                }
+            }
+
+            if profile.isDefault {
+                updatedProfiles.removeValue(forKey: control.display.identifier)
+            } else {
+                updatedProfiles[control.display.identifier] = profile
+            }
+        }
+
+        settings.wallpaperDisplayProfiles = updatedProfiles
+        refreshDisplayProfilesButton()
+        delegate?.wallpaperDisplaySelectionDidChange()
+        updateManager?.update()
+    }
+
+    private func displayConfigurationIcon() -> NSImage? {
+        let configuration = NSImage.SymbolConfiguration(pointSize: 48, weight: .regular)
+        return NSImage(systemSymbolName: "display.2", accessibilityDescription: "Displays")?
+            .withSymbolConfiguration(configuration)
+    }
+
+    private func profileHeader(_ title: String) -> NSTextField {
+        let field = NSTextField(labelWithString: title)
+        field.font = .boldSystemFont(ofSize: NSFont.systemFontSize)
+        return field
+    }
+
+    private func displayMarketSelector(for profile: WallpaperDisplayProfile) -> NSPopUpButton {
+        let selector = NSPopUpButton(frame: .zero, pullsDown: false)
+        let globalTitle = BingMarketOption.all.first(where: {
+            $0.code == settings.bingMarketCode
+        })?.title ?? BingMarketOption.automatic.title
+        addProfileOption(title: "Inherit Global — \(globalTitle)", value: "inherit", to: selector)
+        addProfileOption(title: BingMarketOption.automatic.title, value: "automatic", to: selector)
+        for option in BingMarketOption.all where option.code != nil {
+            addProfileOption(title: option.title, value: option.code!, to: selector)
+        }
+
+        let selectedValue: String
+        switch profile.marketMode {
+        case .inherit:
+            selectedValue = "inherit"
+        case .automatic:
+            selectedValue = "automatic"
+        case .explicit:
+            selectedValue = profile.marketCode ?? "inherit"
+        }
+        selector.select(selector.itemArray.first(where: {
+            ($0.representedObject as? String) == selectedValue
+        }))
+        return selector
+    }
+
+    private func addProfileOption(title: String, value: String, to selector: NSPopUpButton) {
+        let item = NSMenuItem(title: title, action: nil, keyEquivalent: "")
+        item.representedObject = value
+        selector.menu?.addItem(item)
+    }
+
+    private func applyMarketSelection(
+        _ selector: NSPopUpButton,
+        to profile: inout WallpaperDisplayProfile
+    ) {
+        let value = selector.selectedItem?.representedObject as? String ?? "inherit"
+        switch value {
+        case "inherit":
+            profile.marketMode = .inherit
+            profile.marketCode = nil
+        case "automatic":
+            profile.marketMode = .automatic
+            profile.marketCode = nil
+        default:
+            profile.marketMode = .explicit
+            profile.marketCode = BingMarketOption.supportedCodes.contains(value) ? value : nil
+        }
     }
 
     private func promptToApproveLoginItem() {
@@ -138,6 +691,15 @@ class SettingsVc: NSViewController {
     private func presentLaunchAtLoginError(_ error: Error) {
         let alert = NSAlert()
         alert.messageText = "Couldn't update Launch at Login"
+        alert.informativeText = error.localizedDescription
+        alert.alertStyle = .warning
+        alert.addButton(withTitle: "Ok")
+        alert.runModal()
+    }
+
+    private func presentImagePathError(_ error: Error) {
+        let alert = NSAlert()
+        alert.messageText = "Couldn't use the selected image location"
         alert.informativeText = error.localizedDescription
         alert.alertStyle = .warning
         alert.addButton(withTitle: "Ok")

@@ -14,55 +14,204 @@ private let logger = Logger(
     category: Logging.Category.Database.rawValue
 )
 
-class Database {
+@MainActor
+final class Database {
+    enum Error: LocalizedError {
+        case noValidMetadata
+        case persistentStoreUnavailable(String)
+
+        var errorDescription: String? {
+            switch self {
+            case .noValidMetadata:
+                return "Bing returned no valid wallpaper metadata"
+            case .persistentStoreUnavailable(let message):
+                return "The wallpaper database is unavailable: \(message)"
+            }
+        }
+    }
+
+    struct ImageDescriptorUpdate {
+        let descriptors: [ImageDescriptor]
+        let wallpaperIDsRequiringDownload: Set<String>
+    }
+
     static let instance = Database()
-    
+
+    private(set) var recoveryNotice: String?
+
     private init() { }
+
+    init(inMemory: Bool) {
+        self.useInMemoryStore = inMemory
+    }
+
+    private var useInMemoryStore = false
     
     @MainActor
     func allImageDescriptors() -> [ImageDescriptor] {
+        return fetchImageDescriptorsOrEmpty()
+    }
+
+    @MainActor
+    func allImageDescriptors(marketCode: String?) -> [ImageDescriptor] {
+        return fetchImageDescriptorsOrEmpty(predicate: marketPredicate(marketCode))
+    }
+
+    @MainActor
+    private func fetchImageDescriptors(predicate: NSPredicate? = nil) throws -> [ImageDescriptor] {
         let fetchRequest = NSFetchRequest<ImageDescriptor>(entityName: "ImageDescriptor")
+        fetchRequest.predicate = predicate
+        fetchRequest.sortDescriptors = [
+            NSSortDescriptor(key: "startDate", ascending: true),
+            NSSortDescriptor(key: "lastSeenAt", ascending: true),
+            NSSortDescriptor(key: "marketCode", ascending: true)
+        ]
         
+        return try persistentContainer.viewContext.fetch(fetchRequest)
+    }
+
+    private func fetchImageDescriptorsOrEmpty(
+        predicate: NSPredicate? = nil
+    ) -> [ImageDescriptor] {
         do {
-            return try persistentContainer.viewContext
-                .fetch(fetchRequest)
-                .sorted()
+            return try fetchImageDescriptors(predicate: predicate)
         } catch let error as NSError {
             logger.error("Could not fetch. \(error, privacy: .public), \(error.userInfo, privacy: .public)")
             return []
         }
     }
-    
-    @MainActor
-    func deleteImageDescriptors(olderThan oldestDateStringToKeep: String) throws {
-        let managedContext = persistentContainer.viewContext
-        
-        allImageDescriptors()
-            .filter { $0.startDate <= oldestDateStringToKeep }
-            .forEach { managedContext.delete($0) }
-        
-        try managedContext.save()
+
+    private func marketPredicate(_ marketCode: String?) -> NSPredicate {
+        if let marketCode {
+            return NSPredicate(format: "marketCode == %@", marketCode)
+        }
+        return NSPredicate(format: "marketCode == nil")
     }
     
     @MainActor
-    func updateImageDescriptors(from imageEntries: [DownloadManager.ImageEntry]) -> [ImageDescriptor] {
+    @discardableResult
+    func deleteImageDescriptors(
+        exceedingMaximumCount maximumCount: Int,
+        preserving wallpaperIDs: Set<String> = []
+    ) throws -> Set<String> {
         let managedContext = persistentContainer.viewContext
-        let preservedStartDates = allImageDescriptors()
-            .map { $0.startDate }
-        
-        let imageDescriptors = imageEntries
-            .filter { imageEntry in preservedStartDates.contains(imageEntry.startdate) == false }
-            .map { image -> ImageDescriptor in
-                ImageDescriptor.instantiate(from: image, in: managedContext)
+        let allDescriptors = try fetchImageDescriptors()
+        let numberToDelete = max(0, allDescriptors.count - max(0, maximumCount))
+        let descriptorsToDelete = allDescriptors.prefix(numberToDelete)
+            .filter {
+                wallpaperIDs.contains($0.wallpaperIdentifier) == false
             }
+        let deletedObjectIDs = Set(descriptorsToDelete.map(\.objectID))
+        let remainingFileNames = Set(allDescriptors.compactMap { descriptor in
+            deletedObjectIDs.contains(descriptor.objectID) ? nil : descriptor.image.fileName
+        })
+        let deletedFileNames = Set(descriptorsToDelete.map { $0.image.fileName })
+            .subtracting(remainingFileNames)
+        descriptorsToDelete.forEach { managedContext.delete($0) }
         
         do {
             try managedContext.save()
-        } catch let error as NSError {
-            logger.error("Could not save. \(error, privacy: .public), \(error.userInfo, privacy: .public)")
+        } catch {
+            managedContext.rollback()
+            throw error
+        }
+        return deletedFileNames
+    }
+
+    @MainActor
+    func deleteAllImageDescriptors() throws {
+        let managedContext = persistentContainer.viewContext
+        try fetchImageDescriptors().forEach { managedContext.delete($0) }
+        do {
+            try managedContext.save()
+        } catch {
+            managedContext.rollback()
+            throw error
+        }
+    }
+    
+    @MainActor
+    func updateImageDescriptors(
+        from imageEntries: [DownloadManager.ImageEntry],
+        marketCode: String?
+    ) throws -> ImageDescriptorUpdate {
+        let managedContext = persistentContainer.viewContext
+        var descriptorByIdentity = try fetchImageDescriptors(
+            predicate: marketPredicate(marketCode)
+        )
+            .reduce(into: [String: ImageDescriptor]()) { descriptors, descriptor in
+                let identity = ImageDescriptor.archiveIdentity(
+                    startDate: descriptor.startDate,
+                    marketCode: descriptor.marketCode,
+                    imageURL: descriptor.imageUrl
+                )
+                descriptors[identity] = descriptor
+            }
+        var wallpaperIDsRequiringDownload = Set<String>()
+        var validMetadataCount = 0
+        var currentDescriptors = [ImageDescriptor]()
+        
+        for image in imageEntries {
+            do {
+                let metadata = try ImageDescriptor.validatedMetadata(from: image)
+                let archiveIdentity = ImageDescriptor.archiveIdentity(
+                    startDate: metadata.startDate,
+                    marketCode: marketCode,
+                    imageURL: metadata.imageURL
+                )
+                if let existingDescriptor = descriptorByIdentity[archiveIdentity] {
+                    if try existingDescriptor.update(from: image) {
+                        wallpaperIDsRequiringDownload.insert(existingDescriptor.wallpaperIdentifier)
+                    }
+                    if existingDescriptor.requiresImageDownload {
+                        wallpaperIDsRequiringDownload.insert(existingDescriptor.wallpaperIdentifier)
+                    }
+                    currentDescriptors.append(existingDescriptor)
+                    validMetadataCount += 1
+                } else {
+                    let descriptor = try ImageDescriptor.instantiate(
+                        from: image,
+                        marketCode: marketCode,
+                        in: managedContext
+                    )
+                    descriptorByIdentity[archiveIdentity] = descriptor
+                    currentDescriptors.append(descriptor)
+                    validMetadataCount += 1
+                }
+            } catch {
+                logger.error("Skipping invalid Bing wallpaper metadata: \(error.localizedDescription, privacy: .public)")
+            }
         }
         
-        return imageDescriptors
+        guard validMetadataCount > 0 else {
+            managedContext.rollback()
+            throw Error.noValidMetadata
+        }
+
+        do {
+            try managedContext.save()
+        } catch let error as NSError {
+            managedContext.rollback()
+            logger.error("Could not save. \(error, privacy: .public), \(error.userInfo, privacy: .public)")
+            throw error
+        }
+        
+        return ImageDescriptorUpdate(
+            descriptors: currentDescriptors,
+            wallpaperIDsRequiringDownload: wallpaperIDsRequiringDownload
+        )
+    }
+
+    func markImageDownloadCompleted(for descriptor: ImageDescriptor) throws {
+        guard descriptor.requiresImageDownload else { return }
+        let managedContext = persistentContainer.viewContext
+        descriptor.requiresImageDownload = false
+        do {
+            try managedContext.save()
+        } catch {
+            managedContext.rollback()
+            throw error
+        }
     }
     
     
@@ -98,13 +247,32 @@ class Database {
         copyrightUrlAttr.name = "copyrightUrl"
         copyrightUrlAttr.attributeType = .URIAttributeType
         copyrightUrlAttr.isOptional = false
+
+        let marketCodeAttr = NSAttributeDescription()
+        marketCodeAttr.name = "marketCode"
+        marketCodeAttr.attributeType = .stringAttributeType
+        marketCodeAttr.isOptional = true
+
+        let requiresImageDownloadAttr = NSAttributeDescription()
+        requiresImageDownloadAttr.name = "requiresImageDownload"
+        requiresImageDownloadAttr.attributeType = .booleanAttributeType
+        requiresImageDownloadAttr.isOptional = false
+        requiresImageDownloadAttr.defaultValue = false
+
+        let lastSeenAtAttr = NSAttributeDescription()
+        lastSeenAtAttr.name = "lastSeenAt"
+        lastSeenAtAttr.attributeType = .dateAttributeType
+        lastSeenAtAttr.isOptional = true
         
         entity.properties = [
             startDateAttr,
             endDateAttr,
             imageUrlAttr,
             descriptionStringAttr,
-            copyrightUrlAttr
+            copyrightUrlAttr,
+            marketCodeAttr,
+            requiresImageDownloadAttr,
+            lastSeenAtAttr
         ]
         
         return entity
@@ -116,14 +284,90 @@ class Database {
         return model
     }
     
-    lazy var persistentContainer: NSPersistentContainer = {
-        let container = NSPersistentContainer(name: "DataModel", managedObjectModel: managedObjectModel())
-        
-        container.loadPersistentStores(completionHandler: { _, error in
-            if let error = error as NSError? {
-                fatalError("Unresolved error \(error), \(error.userInfo)")
+    private final class StoreLoadResult: @unchecked Sendable {
+        var error: NSError?
+    }
+
+    private func makePersistentContainer(inMemory: Bool) -> NSPersistentContainer {
+        let container = NSPersistentContainer(
+            name: "DataModel",
+            managedObjectModel: managedObjectModel()
+        )
+        if inMemory {
+            let description = NSPersistentStoreDescription()
+            description.type = NSInMemoryStoreType
+            description.shouldAddStoreAsynchronously = false
+            container.persistentStoreDescriptions = [description]
+        } else {
+            container.persistentStoreDescriptions.forEach {
+                $0.shouldAddStoreAsynchronously = false
+                $0.setOption(true as NSNumber, forKey: NSMigratePersistentStoresAutomaticallyOption)
+                $0.setOption(true as NSNumber, forKey: NSInferMappingModelAutomaticallyOption)
             }
-        })
+        }
         return container
+    }
+
+    private func loadPersistentStores(into container: NSPersistentContainer) -> NSError? {
+        let result = StoreLoadResult()
+        container.loadPersistentStores { _, error in
+            result.error = error as NSError?
+        }
+        return result.error
+    }
+
+    private func backupCorruptStore(at storeURL: URL) throws -> URL {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.dateFormat = "yyyyMMdd-HHmmss"
+        let backupDirectory = storeURL.deletingLastPathComponent()
+            .appendingPathComponent("CorruptStore-\(formatter.string(from: Date()))", isDirectory: true)
+        try FileManager.default.createDirectory(
+            at: backupDirectory,
+            withIntermediateDirectories: true
+        )
+
+        for suffix in ["", "-wal", "-shm"] {
+            let source = URL(fileURLWithPath: storeURL.path + suffix)
+            guard FileManager.default.fileExists(atPath: source.path) else { continue }
+            try FileManager.default.moveItem(
+                at: source,
+                to: backupDirectory.appendingPathComponent(source.lastPathComponent)
+            )
+        }
+        return backupDirectory
+    }
+
+    lazy var persistentContainer: NSPersistentContainer = {
+        let initialContainer = makePersistentContainer(inMemory: useInMemoryStore)
+        guard let initialError = loadPersistentStores(into: initialContainer) else {
+            return initialContainer
+        }
+
+        logger.fault("Failed to load the wallpaper database: \(initialError, privacy: .public)")
+        guard useInMemoryStore == false,
+              let storeURL = initialContainer.persistentStoreDescriptions.first?.url else {
+            recoveryNotice = Error.persistentStoreUnavailable(
+                initialError.localizedDescription
+            ).localizedDescription
+            return initialContainer
+        }
+
+        do {
+            let backupDirectory = try backupCorruptStore(at: storeURL)
+            let replacementContainer = makePersistentContainer(inMemory: false)
+            if let replacementError = loadPersistentStores(into: replacementContainer) {
+                throw replacementError
+            }
+            recoveryNotice = "The wallpaper database was damaged and has been rebuilt. A backup was saved at \(backupDirectory.path)."
+            logger.fault("Rebuilt the wallpaper database after moving the damaged store to \(backupDirectory.path, privacy: .public)")
+            return replacementContainer
+        } catch {
+            let fallbackContainer = makePersistentContainer(inMemory: true)
+            let fallbackError = loadPersistentStores(into: fallbackContainer)
+            recoveryNotice = "The wallpaper database could not be opened. BingWallpaper is using a temporary in-memory database for this session. \((fallbackError ?? error as NSError).localizedDescription)"
+            logger.fault("Falling back to an in-memory wallpaper database: \(error.localizedDescription, privacy: .public)")
+            return fallbackContainer
+        }
     }()
 }
