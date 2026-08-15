@@ -1,7 +1,12 @@
 # Bing Wallpaper for Mac
 
 <p align="center">
-  <img width="400" alt="screenshot" src="https://user-images.githubusercontent.com/4823365/181782535-6235edf9-5e70-4861-96df-b4e2719482cf.png">
+  <img src="docs/screenshots/menu.png" width="420" alt="BingWallpaper menu with wallpaper preview and update status">
+</p>
+
+<p align="center">
+  <img src="docs/screenshots/settings.jpg" width="38%" alt="BingWallpaper settings with region and display controls">
+  <img src="docs/screenshots/display-profiles.jpg" width="58%" alt="Per-display Bing region and wallpaper profiles">
 </p>
 
 BingWallpaper is a menubar app for MacOS which automatically downloads the newest [bing wallpaper of the day](https://www.microsoft.com/bing/bing-wallpaper)
